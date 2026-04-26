@@ -22,7 +22,7 @@ from rich.console import detect_legacy_windows
 from textual import work, on
 from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
-from textual.widgets import Footer, Button, Header, Label, Input, Switch, Select, TabbedContent, TabPane, Log, Static, ProgressBar
+from textual.widgets import Footer, Button, Header, Label, Input, Switch, Select, TabbedContent, TabPane, Log, Static, ProgressBar, ContentSwitcher
 from textual.events import Print
 from textual.containers import ScrollableContainer, Center, CenterMiddle, Grid, ItemGrid, Vertical
 from textual.reactive import reactive
@@ -42,7 +42,7 @@ from redfetch import utils
 from redfetch import meta
 from redfetch import sync
 from redfetch import desktop_shortcut
-from redfetch.sync_types import SyncEvent
+from redfetch.sync_types import PlanSummary, SyncEvent
 from redfetch.runtime_errors import display_fatal_error
 
 # for dev mode, from root dir:
@@ -64,6 +64,8 @@ def get_staff_pick_ids_for_env(env: str) -> list[str]:
 
 class FetchTab(ScrollableContainer):
     """Content for the Fetch tab."""
+
+    _current_fetch_view: str = "log"
 
     def compose(self) -> ComposeResult:
         # Determine input verb based on terminal
@@ -141,8 +143,12 @@ class FetchTab(ScrollableContainer):
                         variant="default",
                         tooltip="Clear all text from the log view.",
                     )
-                # Log widget that captures print statements
-                yield PrintCapturingLog(id="fetch_log")
+                with ContentSwitcher(initial="fetch_log", id="fetch_pane_switcher"):
+                    yield PrintCapturingLog(id="fetch_log")
+                    yield ScrollableContainer(
+                        Static("", id="fetch_summary_content"),
+                        id="fetch_summary_view",
+                    )
 
     #
     # Log search helpers
@@ -240,6 +246,12 @@ class FetchTab(ScrollableContainer):
         self._log_search_index = -1
         self._log_search_term = ""
 
+    def _set_fetch_view(self, view: str) -> None:
+        """Switch the main Fetch pane between log and summary views."""
+        self._current_fetch_view = view
+        switcher = self.query_one("#fetch_pane_switcher", ContentSwitcher)
+        switcher.current = "fetch_summary_view" if view == "summary" else "fetch_log"
+
     def sync_from_app(self, app: "Redfetch") -> None:
         """Update this tab's widgets from top-level app state."""
         self._update_from_state()
@@ -295,6 +307,38 @@ class FetchTab(ScrollableContainer):
             # Prevent recursive Select.Changed events when we sync from app state
             with self.prevent(Select.Changed):
                 server_type_fetch.value = app.current_env
+
+        self.update_sync_summary(app.latest_sync_summary)
+
+    def update_sync_summary(self, summary: PlanSummary | None) -> None:
+        """Render the latest structured sync summary for the footer-driven summary view."""
+        summary_content = self.query_one("#fetch_summary_content", Static)
+        if summary is None:
+            summary_content.update("")
+            self._set_fetch_view("log")
+            return
+
+        lines = [
+            "Latest sync summary",
+            "Press Ctrl+Y to return to the log.",
+            "",
+            f"{'Resources in scope:':<28} >>> {summary.resources_in_scope} <<<",
+            f"{'Resources to download:':<28} >>> {summary.resources_to_download} <<<",
+        ]
+        if summary.resources_to_untrack:
+            lines.append(
+                f"{'Resources to untrack:':<28} >>> {summary.resources_to_untrack} <<<"
+            )
+        for section in summary.sections:
+            lines.append("")
+            lines.append(f"{section.label + ':':<28} >>> {section.count} <<<")
+            for item in section.items:
+                detail = f": {item.detail}" if item.detail else ""
+                lines.append(f"  - {item.title} (id={item.resource_id}){detail}")
+        if not summary.sections:
+            lines.append("")
+            lines.append("No detailed sync summary for this run.")
+        summary_content.update("\n".join(lines))
 
     #
     # Event handlers for widgets on this tab
@@ -1090,6 +1134,7 @@ class Redfetch(App):
     download_folder: reactive[str] = reactive("")
     eq_path: reactive[str] = reactive("")
     current_env: reactive[str] = reactive(config.settings.ENV)
+    latest_sync_summary: PlanSummary | None = None
 
     CSS_PATH = "terminal_ui.tcss"
 
@@ -1100,6 +1145,7 @@ class Redfetch(App):
         ("ctrl+t", "cycle_theme", "Theme"),
         ("ctrl+f", "focus_search", "Search Log"),
         ("ctrl+s", "cycle_server_type", "Server Type"),
+        ("ctrl+y", "toggle_fetch_summary", "Summary"),
         Binding("ctrl+r", "start_interface", "RG.com Interface", tooltip="Download resources while you browse redguides.com"),
         Binding("ctrl+r", "stop_interface", "Stop Interface", tooltip="Other buttons are disabled until you stop the interface"),
         ("n", "search_next"),
@@ -1328,6 +1374,25 @@ class Redfetch(App):
             except Exception:
                 pass
 
+    def action_toggle_fetch_summary(self) -> None:
+        """Toggle the Fetch pane between log and summary views."""
+        main_screen = self._get_main_screen()
+        if not main_screen:
+            return
+
+        tabbed_content = main_screen.query_one(TabbedContent)
+        if tabbed_content.active != "fetch":
+            tabbed_content.active = "fetch"
+
+        fetch_tab = main_screen.query_one(FetchTab)
+        if self.latest_sync_summary is None:
+            self.notify("No sync summary is available yet.")
+            fetch_tab._set_fetch_view("log")
+            return
+
+        next_view = "summary" if fetch_tab._current_fetch_view == "log" else "log"
+        fetch_tab._set_fetch_view(next_view)
+
     def action_search_next(self) -> None:
         """Keyboard action: go to next log search match."""
         main_screen = self._get_main_screen()
@@ -1360,6 +1425,8 @@ class Redfetch(App):
             return not self.interface_running  # Hide when running
         if action == "stop_interface":
             return self.interface_running  # Hide when not running
+        if action == "toggle_fetch_summary":
+            return self.latest_sync_summary is not None
         return True
 
     #
@@ -1782,6 +1849,7 @@ class Redfetch(App):
         """Handle the update process for watched resources."""
         if self.is_updating:
             return
+        self.latest_sync_summary = None
         self.notify("Updating watched resources...")
         self.is_updating = True
         self._update_watched_worker()
@@ -1856,6 +1924,10 @@ class Redfetch(App):
         event_type, resource_id, details = event
         self._process_sync_event(event_type, resource_id, details)
 
+    def on_plan_summary(self, summary: PlanSummary) -> None:
+        """Capture the latest structured sync summary for display in the Fetch tab."""
+        self.latest_sync_summary = summary
+
     def _process_sync_event(self, event_type: str, resource_id: str | int, details: str | None) -> None:
         """Process sync events on the main thread."""
         main_screen = self._get_main_screen()
@@ -1900,6 +1972,7 @@ class Redfetch(App):
                 db_path, headers,
                 resource_ids=resource_ids,
                 on_event=self.on_sync_event,
+                on_plan_summary=self.on_plan_summary,
                 navmesh_override=navmesh_override,
             )
             return result
@@ -1976,6 +2049,7 @@ class Redfetch(App):
 
         print("Downloading resource please wait...")
         self.notify(f"Updating Resource ID: {resource_id}")
+        self.latest_sync_summary = None
         self.is_updating = True
         self._update_single_resource_worker(resource_id)
 
