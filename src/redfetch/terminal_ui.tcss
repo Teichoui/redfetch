@@ -140,7 +140,18 @@ Label {
     layout: grid;
     grid-rows: 1 1fr;
     grid-gutter: 0;
+    height: 1fr;
     min-height: 10;
+}
+
+#fetch_pane_switcher {
+    column-span: 5;
+    height: 1fr;
+    min-height: 8;
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: $secondary-background-darken-3 59%;
 }
 
 #log_toolbar {
@@ -183,11 +194,28 @@ Label {
     border-right: vkey $secondary-background-darken-1;
     border-top: none;
     background: $secondary-background-darken-3 59%;
-    column-span: 5;
     color: $text-muted;
     height: 1fr;
     min-height: 8;
     overflow-y: auto;
+    overflow-x: hidden;
+}
+
+#fetch_summary_view {
+    border: vkey $secondary-background-darken-1;
+    border-bottom: none;
+    border-right: vkey $secondary-background-darken-1;
+    border-top: none;
+    background: $secondary-background-darken-3 59%;
+    color: $text-muted;
+    height: 1fr;
+    min-height: 8;
+    overflow-y: auto;
+}
+
+#fetch_summary_content {
+    padding: 1 2;
+    color: $text-muted;
 }
 
 /* Settings Grid */

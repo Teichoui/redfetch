@@ -316,6 +316,31 @@ class ExecutionPlan(SyncModel):
         return counts
 
 
+class PlanSummaryItem(SyncModel):
+    """One resource shown inside the sync summary."""
+
+    resource_id: str
+    title: str
+    detail: str | None = None
+
+
+class PlanSummarySection(SyncModel):
+    """One section in the sync summary."""
+
+    label: str
+    count: int
+    items: list[PlanSummaryItem] = Field(default_factory=list)
+
+
+class PlanSummary(SyncModel):
+    """Structured summary of the current sync plan for the UI."""
+
+    resources_in_scope: int
+    resources_to_download: int
+    resources_to_untrack: int = 0
+    sections: list[PlanSummarySection] = Field(default_factory=list)
+
+
 class ExecutionResultItem(SyncModel):
     """One target's result: what happened and why."""
 

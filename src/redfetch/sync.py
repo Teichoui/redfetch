@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 
 import httpx
 
@@ -14,6 +15,9 @@ from redfetch.sync_types import (
     ExecutionPlan,
     ExecutionResult,
     PLAN_REASON_META,
+    PlanSummary,
+    PlanSummaryItem,
+    PlanSummarySection,
     ReasonInfo,
     SyncEventCallback,
     reason_message,
@@ -24,10 +28,20 @@ _sync_lock: asyncio.Lock | None = None
 _DEFAULT_REASON = ReasonInfo(message="")
 
 
-def _print_plan_summary(
+def _make_summary_item(action) -> PlanSummaryItem:
+    label = action.title or action.resource_id
+    detail = reason_message(action.reason) if action.reason != "not_installed" else None
+    return PlanSummaryItem(
+        resource_id=action.resource_id,
+        title=label,
+        detail=detail,
+    )
+
+
+def build_plan_summary(
     execution_plan: ExecutionPlan,
     resource_ids: list[str] | None = None,
-) -> None:
+) -> PlanSummary:
     is_full_sync = resource_ids is None
     all_blocked = [
         action for action in execution_plan.actions.values()
@@ -41,24 +55,84 @@ def _print_plan_summary(
         blocked = all_blocked
 
     counts = execution_plan.action_counts()
-    print(f"Resources in scope: >>> {len(execution_plan.actions)} <<<")
-    print(f"Resources to download: >>> {counts.get('download', 0)} <<<")
-    if blocked:
-        print(f"Resources blocked: >>> {len(blocked)} <<<")
-        for action in blocked:
-            label = action.title or action.resource_id
-            print(f"  - {label} (id={action.resource_id}): {reason_message(action.reason)}")
+    sections: list[PlanSummarySection] = []
 
-    summary_buckets: dict[str, int] = {}
+    download_items = [
+        PlanSummaryItem(
+            resource_id=action.resource_id,
+            title=action.title or action.resource_id,
+            detail=action.artifact.filename if action.artifact else reason_message(action.reason),
+        )
+        for action in execution_plan.actions.values()
+        if action.action == "download"
+    ]
+    if download_items:
+        sections.append(
+            PlanSummarySection(
+                label="Resources to download",
+                count=len(download_items),
+                items=sorted(download_items, key=lambda item: (item.title.lower(), item.resource_id)),
+            )
+        )
+
+    if blocked:
+        blocked_items = [
+            PlanSummaryItem(
+                resource_id=action.resource_id,
+                title=action.title or action.resource_id,
+                detail=reason_message(action.reason),
+            )
+            for action in blocked
+        ]
+        sections.append(
+            PlanSummarySection(
+                label="Resources blocked",
+                count=len(blocked_items),
+                items=sorted(blocked_items, key=lambda item: (item.title.lower(), item.resource_id)),
+            )
+        )
+
+    grouped_quiet: dict[str, list[PlanSummaryItem]] = {}
     for action in quiet:
         label = PLAN_REASON_META[action.reason].summary_label
-        if label:
-            summary_buckets[label] = summary_buckets.get(label, 0) + 1
-    for label, count in summary_buckets.items():
-        print(f"{label}: >>> {count} <<<")
+        if not label:
+            continue
+        grouped_quiet.setdefault(label, []).append(_make_summary_item(action))
 
-    if counts.get("untrack", 0):
-        print(f"Resources to untrack: >>> {counts.get('untrack', 0)} <<<")
+    for label, items in grouped_quiet.items():
+        sections.append(
+            PlanSummarySection(
+                label=label,
+                count=len(items),
+                items=sorted(items, key=lambda item: (item.title.lower(), item.resource_id)),
+            )
+        )
+
+    return PlanSummary(
+        resources_in_scope=len(execution_plan.actions),
+        resources_to_download=counts.get("download", 0),
+        resources_to_untrack=counts.get("untrack", 0),
+        sections=sections,
+    )
+
+
+def _print_plan_summary(
+    execution_plan: ExecutionPlan,
+    resource_ids: list[str] | None = None,
+) -> None:
+    summary = build_plan_summary(execution_plan, resource_ids=resource_ids)
+    print(f"Resources in scope: >>> {summary.resources_in_scope} <<<")
+    print(f"Resources to download: >>> {summary.resources_to_download} <<<")
+
+    for section in summary.sections:
+        print(f"{section.label}: >>> {section.count} <<<")
+        if section.label == "Resources blocked":
+            for item in section.items:
+                detail = f": {item.detail}" if item.detail else ""
+                print(f"  - {item.title} (id={item.resource_id}){detail}")
+
+    if summary.resources_to_untrack:
+        print(f"Resources to untrack: >>> {summary.resources_to_untrack} <<<")
 
 
 def _print_failure_detail(
@@ -115,6 +189,7 @@ async def sync(
     headers: dict,
     resource_ids: list[str] | None = None,
     on_event: SyncEventCallback | None = None,
+    on_plan_summary: Callable[[PlanSummary], None] | None = None,
 ) -> bool:
     """Discover, plan, and execute a sync run against the API."""
     settings_env = config.settings.ENV
@@ -145,6 +220,8 @@ async def sync(
     )
 
     _print_plan_summary(execution_plan, resource_ids=resource_ids)
+    if on_plan_summary:
+        on_plan_summary(build_plan_summary(execution_plan, resource_ids=resource_ids))
     if on_event:
         on_event(("total", len(execution_plan.actions), None))
 
@@ -206,6 +283,7 @@ async def run_sync(
     headers: dict,
     resource_ids: list[str] | None = None,
     on_event: SyncEventCallback | None = None,
+    on_plan_summary: Callable[[PlanSummary], None] | None = None,
     navmesh_override: bool | None = None,
 ) -> bool:
     """Top-level entry point: run the sync pipeline under a global lock, then navmesh if applicable."""
@@ -220,6 +298,7 @@ async def run_sync(
                 headers,
                 resource_ids=resource_ids,
                 on_event=on_event,
+                on_plan_summary=on_plan_summary,
             )
 
             if resource_ids is None:
