@@ -232,6 +232,14 @@ class LocalSnapshot(SyncModel):
         ]
 
 
+class UpdateCheckResult(SyncModel):
+    """Machine-readable summary for non-interactive update checks."""
+
+    updates_available: int
+    caller_update_available: bool | None = None
+    caller_resource_id: str | None = None
+
+
 class PlannedAction(TargetIdentity):
     """What the planner decided to do with one install target, and why."""
 
