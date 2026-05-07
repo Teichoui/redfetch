@@ -2054,7 +2054,7 @@ class Redfetch(App):
         main_screen = self._get_main_screen()
         self.username = await auth.get_username()
         headers = await auth.get_api_headers()
-        if await api.is_kiss_downloadable(headers):
+        if await api.is_kiss_downloadable(headers, force_refresh=True):
             greeting = f"[italic]Hail, [bold]{self.username}![/bold][/italic]"
             greetingacct = (
                 f"[italic][bold]{self.username}, thank you for being level 2[/bold][/italic] 💛"
