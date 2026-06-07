@@ -10,6 +10,7 @@ import sys
 
 MQ_LUAROCKS_REPO = "https://luarocks.macroquest.org/"
 MQ_LUAROCKS_LUA_VERSION = "5.1"
+LUAROCKS_INSTALL_TIMEOUT_SECONDS = 120
 
 
 @dataclass(frozen=True)
@@ -172,6 +173,35 @@ def describe_status(status: LuaPackageStatus) -> str:
     return "already present and verified" if status.installed else "missing"
 
 
+def _format_process_output(*parts: object) -> str | None:
+    output_parts: list[str] = []
+    for part in parts:
+        if not part:
+            continue
+        text = part.decode(errors="replace") if isinstance(part, bytes) else str(part)
+        if text.strip():
+            output_parts.append(text.strip())
+    return "\n".join(output_parts) or None
+
+
+def _failed_install_status(package: CommonLuaPackage, exc: Exception) -> LuaPackageStatus:
+    detail_bits = [f"{type(exc).__name__}: {exc}"]
+    output = _format_process_output(
+        getattr(exc, "stdout", None),
+        getattr(exc, "stderr", None),
+    )
+    if output:
+        detail_bits.append(output)
+    return LuaPackageStatus(
+        package_name=package.package_name,
+        require_name=package.require_name,
+        installed=False,
+        install_attempted=True,
+        install_succeeded=False,
+        detail="\n".join(detail_bits),
+    )
+
+
 def install_common_lua_package(
     *,
     luarocks_exe: Path,
@@ -179,22 +209,24 @@ def install_common_lua_package(
     package: CommonLuaPackage,
 ) -> LuaPackageStatus:
     command = _package_install_command(luarocks_exe, tree, package.package_name)
-    completed = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=LUAROCKS_INSTALL_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return _failed_install_status(package, exc)
+    except Exception as exc:
+        return _failed_install_status(package, exc)
 
     installed = _module_exists(tree, package.require_name)
     detail_bits: list[str] = []
     if completed.returncode != 0:
         detail_bits.append(f"luarocks exited with code {completed.returncode}")
-    output = "\n".join(
-        part.strip()
-        for part in (completed.stdout, completed.stderr)
-        if part and part.strip()
-    )
+    output = _format_process_output(completed.stdout, completed.stderr)
     if output:
         detail_bits.append(output)
 

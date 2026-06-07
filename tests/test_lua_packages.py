@@ -49,8 +49,9 @@ def test_ensure_common_lua_packages_installs_missing_packages(tmp_path: Path, mo
 
     commands: list[list[str]] = []
 
-    def fake_run(command, capture_output, text, check):
+    def fake_run(command, capture_output, text, check, timeout):
         commands.append(command)
+        assert timeout == lua_packages.LUAROCKS_INSTALL_TIMEOUT_SECONDS
         package_name = command[-2] if command[-1] == "0.9.5-1" else command[-1]
         lua_dir = tree / "lib" / "lua" / lua_packages.MQ_LUAROCKS_LUA_VERSION
         if package_name == "lsqlite3":
@@ -70,6 +71,29 @@ def test_ensure_common_lua_packages_installs_missing_packages(tmp_path: Path, mo
     assert all(status.install_attempted for status in result.statuses)
     assert commands[0][-1] == "lsqlite3"
     assert commands[1][-1] == "luafilesystem"
+
+
+def test_install_common_lua_package_reports_subprocess_timeout(tmp_path: Path, monkeypatch):
+    tree = _make_tree(tmp_path / "MQ", "2.1.1774638290")
+    package = lua_packages.CommonLuaPackage("lsqlite3", "lsqlite3")
+
+    def fake_run(command, capture_output, text, check, timeout):
+        raise subprocess.TimeoutExpired(command, timeout, output="partial stdout", stderr="partial stderr")
+
+    monkeypatch.setattr(lua_packages.subprocess, "run", fake_run)
+
+    status = lua_packages.install_common_lua_package(
+        luarocks_exe=Path("luarocks.exe"),
+        tree=tree,
+        package=package,
+    )
+
+    assert status.installed is False
+    assert status.install_attempted is True
+    assert status.install_succeeded is False
+    assert "TimeoutExpired" in status.detail
+    assert "partial stdout" in status.detail
+    assert "partial stderr" in status.detail
 
 
 def test_ensure_common_lua_packages_reports_missing_luarocks_exe(tmp_path: Path):
