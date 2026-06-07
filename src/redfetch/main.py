@@ -262,7 +262,7 @@ def _print_lua_fix_result(result: lua_packages.LuaFixResult) -> None:
         if status.detail and not status.install_succeeded:
             console.print(status.detail)
 
-    if all(status.installed for status in result.statuses):
+    if result.ok:
         console.print("[bold green]Common Lua packages look good.[/bold green]")
     else:
         raise typer.Exit(code=1)
@@ -285,7 +285,7 @@ def _maybe_fix_common_lua_packages_after_update() -> None:
             console.print(f"  - {status.package_name} ({status.require_name})")
         return
 
-    if all(status.installed for status in result.statuses):
+    if result.ok:
         console.print("[green]Common Lua packages checked and verified:[/green]")
         for status in result.statuses:
             console.print(f"  - {status.package_name} ({status.require_name}): {lua_packages.describe_status(status)}")

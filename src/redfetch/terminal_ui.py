@@ -1,5 +1,6 @@
 # standard
 import asyncio
+import logging
 import os
 import sys
 import subprocess
@@ -45,6 +46,9 @@ from redfetch import sync
 from redfetch import desktop_shortcut
 from redfetch.sync_types import SyncEvent
 from redfetch.runtime_errors import display_fatal_error
+
+
+logger = logging.getLogger(__name__)
 
 # for dev mode, from root dir:
 # "hatch shell dev" 
@@ -1937,7 +1941,7 @@ class Redfetch(App):
                 print(f"  - {status.package_name} ({status.require_name})")
             return
 
-        if all(status.installed for status in result.statuses):
+        if result.ok:
             print("Common Lua packages checked and verified:")
             for status in result.statuses:
                 print(
@@ -2091,7 +2095,10 @@ class Redfetch(App):
                 self.notify("Failed to repair common Lua packages.", severity="error")
                 return False
 
-            assert result.target_tree is not None
+            if result.target_tree is None:
+                message = "Lua package repair completed without a LuaRocks target tree."
+                logger.error(message)
+                raise RuntimeError(message)
             print(f"LuaRocks tree: {result.target_tree}")
             for status in result.statuses:
                 state = lua_packages.describe_status(status)
@@ -2099,7 +2106,7 @@ class Redfetch(App):
                 if status.detail and not status.install_succeeded:
                     print(status.detail)
 
-            if all(status.installed for status in result.statuses):
+            if result.ok:
                 self.notify("Common Lua packages are ready.")
                 return True
 

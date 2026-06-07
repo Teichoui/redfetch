@@ -52,7 +52,7 @@ def test_ensure_common_lua_packages_installs_missing_packages(tmp_path: Path, mo
     def fake_run(command, capture_output, text, check, timeout):
         commands.append(command)
         assert timeout == lua_packages.LUAROCKS_INSTALL_TIMEOUT_SECONDS
-        package_name = command[-2] if command[-1] == "0.9.5-1" else command[-1]
+        package_name = command[-1]
         lua_dir = tree / "lib" / "lua" / lua_packages.MQ_LUAROCKS_LUA_VERSION
         if package_name == "lsqlite3":
             (lua_dir / "lsqlite3.dll").write_text("")
