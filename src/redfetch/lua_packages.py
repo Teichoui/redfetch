@@ -97,6 +97,13 @@ def find_luarocks_tree(mq_path: str | Path) -> Path | None:
     return trees[0]
 
 
+def _repo_for_tree(tree: Path) -> str:
+    jit_version = tree.parent.name
+    if jit_version and jit_version != "modules":
+        return f"{MQ_LUAROCKS_REPO}{jit_version}/"
+    return MQ_LUAROCKS_REPO
+
+
 def _module_exists(tree: Path, require_name: str) -> bool:
     lua_dir = tree / "lib" / "lua" / MQ_LUAROCKS_LUA_VERSION
     if not lua_dir.is_dir():
@@ -144,7 +151,7 @@ def _package_install_command(luarocks_exe: Path, tree: Path, package_name: str) 
         MQ_LUAROCKS_LUA_VERSION,
         "--skip-config-warning",
         "--only-server",
-        MQ_LUAROCKS_REPO,
+        _repo_for_tree(tree),
         "install",
         "--deps-mode",
         "none",

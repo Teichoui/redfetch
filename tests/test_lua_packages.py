@@ -24,6 +24,13 @@ def test_find_luarocks_tree_prefers_latest_versioned_directory(tmp_path: Path):
     assert selected == latest
 
 
+def test_install_command_uses_tree_jit_version_repo(tmp_path: Path):
+    tree = _make_tree(tmp_path / "MQ", "2.1.1774638290")
+    command = lua_packages._package_install_command(Path("luarocks.exe"), tree, "lsqlite3")
+
+    assert "https://luarocks.macroquest.org/2.1.1774638290/" in command
+
+
 def test_ensure_common_lua_packages_installs_missing_packages(tmp_path: Path, monkeypatch):
     mq_path = tmp_path / "MQ"
     mq_path.mkdir()
@@ -34,7 +41,7 @@ def test_ensure_common_lua_packages_installs_missing_packages(tmp_path: Path, mo
 
     def fake_run(command, capture_output, text, check):
         commands.append(command)
-        package_name = command[-1]
+        package_name = command[-2] if command[-1] == "0.9.5-1" else command[-1]
         lua_dir = tree / "lib" / "lua" / lua_packages.MQ_LUAROCKS_LUA_VERSION
         if package_name == "lsqlite3":
             (lua_dir / "lsqlite3.dll").write_text("")
