@@ -24,6 +24,16 @@ def test_find_luarocks_tree_prefers_latest_versioned_directory(tmp_path: Path):
     assert selected == latest
 
 
+def test_find_luarocks_tree_ignores_nonnumeric_versioned_directory(tmp_path: Path):
+    mq_path = tmp_path / "MQ"
+    _make_tree(mq_path, "2.1.beta")
+    latest = _make_tree(mq_path, "2.1.1774638290")
+
+    selected = lua_packages.find_luarocks_tree(mq_path)
+
+    assert selected == latest
+
+
 def test_install_command_uses_tree_jit_version_repo(tmp_path: Path):
     tree = _make_tree(tmp_path / "MQ", "2.1.1774638290")
     command = lua_packages._package_install_command(Path("luarocks.exe"), tree, "lsqlite3")

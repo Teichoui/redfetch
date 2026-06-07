@@ -64,14 +64,15 @@ def _iter_luarocks_trees(modules_dir: Path) -> list[Path]:
     return trees
 
 
-def _tree_sort_key(tree: Path) -> tuple:
-    parts: list[int | str] = []
-    for token in tree.parent.name.replace("-", ".").split("."):
-        if token.isdigit():
-            parts.append(int(token))
-        else:
-            parts.append(token)
-    return tuple(parts)
+def _tree_version_tokens(tree: Path) -> tuple[int, ...] | None:
+    tokens = tree.parent.name.replace("-", ".").split(".")
+    if not tokens or not all(token.isdigit() for token in tokens):
+        return None
+    return tuple(int(token) for token in tokens)
+
+
+def _tree_sort_key(tree: Path) -> tuple[int, ...]:
+    return _tree_version_tokens(tree) or ()
 
 
 def find_luarocks_executable(mq_path: str | Path) -> Path | None:
@@ -89,7 +90,11 @@ def find_luarocks_tree(mq_path: str | Path) -> Path | None:
     if not trees:
         return None
 
-    versioned = [tree for tree in trees if tree.parent != modules_dir]
+    versioned = [
+        tree
+        for tree in trees
+        if tree.parent != modules_dir and _tree_version_tokens(tree) is not None
+    ]
     if versioned:
         versioned.sort(key=_tree_sort_key)
         return versioned[-1]
