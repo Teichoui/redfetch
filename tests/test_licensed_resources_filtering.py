@@ -24,13 +24,13 @@ def _manifest_entry(parent_category_id, *, title="Licensed Resource", version_id
     }
 
 
-def _discover(sync_info: SyncInfo, manifest_entries: dict, env: str):
+def _discover(sync_info: SyncInfo, manifest_entries: dict, env: str, special_resources: dict | None = None):
     mock_settings = MagicMock()
     mock_settings.ENV = env
     mock_settings.from_env.return_value = SimpleNamespace(
         DOWNLOAD_FOLDER="C:\\downloads",
         EQPATH="",
-        SPECIAL_RESOURCES={},
+        SPECIAL_RESOURCES=special_resources or {},
         PROTECTED_FILES_BY_RESOURCE={},
     )
     with patch("redfetch.sync_discovery.config.settings", mock_settings), \
@@ -81,3 +81,24 @@ def test_resource_absent_from_manifest_is_skipped():
     """rgsync sends ids only; an id with no manifest entry has no resolvable category, so it's dropped."""
     desired_set = _discover(SyncInfo(watched={"404404"}), {}, "LIVE")
     assert desired_set.install_targets == {}
+
+
+def test_opt_out_stanza_blocks_watched_and_licensed():
+    """An explicit opt_in=false SPECIAL_RESOURCES stanza stops updates even for watched/licensed resources."""
+    desired_set = _discover(
+        SyncInfo(watched={"4"}, licensed_ids={"4"}),
+        {"4": _manifest_entry(8, title="KissAssist")},
+        "LIVE",
+        special_resources={"4": {"opt_in": False}},
+    )
+    assert desired_set.install_targets == {}
+
+
+def test_opted_in_special_merges_with_watched():
+    desired_set = _discover(
+        SyncInfo(watched={"4"}),
+        {"4": _manifest_entry(8, title="KissAssist")},
+        "LIVE",
+        special_resources={"4": {"opt_in": True}},
+    )
+    assert desired_set.install_targets["/4/"].sources == {"watching", "special"}

@@ -152,10 +152,15 @@ def _root_sources_for_full_sync(
 ) -> dict[str, _RootSpec]:
     """Collect every resource that qualifies for a full sync and how each one qualified."""
     specs: dict[str, _RootSpec] = {}
+    settings_for_env = config.settings.from_env(settings_env)
 
     tagged_ids = [(rid, "watching") for rid in sync_info.watched]
     tagged_ids += [(rid, "licensed") for rid in sync_info.licensed_ids]
     for resource_id, source in tagged_ids:
+        special = settings_for_env.SPECIAL_RESOURCES.get(str(resource_id))
+        if special is not None and not special.get("opt_in", False):
+            # opt_in=false blocks watched/licensed updates
+            continue
         manifest_entry = manifest_resources.get(resource_id)
         if not _category_allowed_in_env(payload_category_id(manifest_entry), settings_env):
             continue
@@ -163,7 +168,6 @@ def _root_sources_for_full_sync(
         spec.sources.add(source)
         spec.payload = manifest_entry
 
-    settings_for_env = config.settings.from_env(settings_env)
     for resource_id, resource_info in settings_for_env.SPECIAL_RESOURCES.items():
         if resource_info.get("opt_in", False):
             specs.setdefault(str(resource_id), _RootSpec()).sources.add("special")
