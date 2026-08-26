@@ -15,6 +15,7 @@ import asyncio
 from rich.prompt import Prompt
 from rich.console import Console
 from rich.markup import escape
+from rich.text import Text
 from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn
 import typer
 
@@ -69,8 +70,18 @@ def _client_choices(conjunction: str = "or") -> str:
     return f"{', '.join(colored[:-1])}, {conjunction} {colored[-1]}"
 
 
-def _client_option(help_text: str = "Use this client for this run only, without changing your active client."):
-    return typer.Option("--client", "--server", "-s", case_sensitive=False, help=help_text)
+def _parse_client(value: str) -> str:
+    """Turn a label or token the user typed for a client ("emu", "RoF2", ...) into its token ("EMU")."""
+    token = config.env_token(value)
+    if token is None:
+        choices = Text.from_markup(_client_choices()).plain  # typer's error box prints markup literally
+        raise typer.BadParameter(f"'{value}' is not a client. Try: {choices}")
+    return token
+
+
+def _client_option(help_text: str = "Use this client for this run only, without changing your active client"):
+    return typer.Option("--client", "--server", "-s", metavar="CLIENT", parser=_parse_client,
+                        help=f"{help_text} ({_client_choices()}).")
 
 
 _Client = Annotated[Env | None, _client_option()]
@@ -580,7 +591,7 @@ def _switch_client(token: str) -> None:
     rich_help_panel="🍔 Configuration"
 )
 def client_command(
-    env: Annotated[Env, typer.Argument(metavar="CLIENT", case_sensitive=False, help=_client_choices())],
+    env: Annotated[Env, typer.Argument(metavar="CLIENT", parser=_parse_client, help=_client_choices())],
 ):
     config.initialize_config()
     _switch_client(env.value)
@@ -614,9 +625,9 @@ def server_command(
         raise typer.BadParameter(
             "NAME and --eqpath/--label/--patcher-* only apply to 'redfetch server add'."
         )
-    token = value.upper()
-    if token in config.ENVS:
-        # a client token still switches the client, no nag.
+    token = config.env_token(value)
+    if token:
+        # a client token or label still switches the client, no nag.
         _switch_client(token)
         return
 
@@ -691,7 +702,8 @@ def _server_add(slug: str | None, *, eqpath: Path | None, label: str | None,
     _require_eq_folder(str(eqpath))
     slug = slug.strip().lower()
     with _usage_errors():
-        # A known slug belongs to its bundled env; new customs go to the first (only) emu env.
+        # A known slug belongs to its bundled env; new customs go to the only emu env.
+        assert len(config.MULTI_SERVER_ENVS) == 1, "with more than one emu client, server add needs a --client to choose"
         server_env = servers.env_for_slug(slug) or config.MULTI_SERVER_ENVS[0]
         servers.add_server(slug, env=server_env, eqpath=str(eqpath), label=label,
                            patcher_url=patcher_url, patcher_exe=patcher_exe,
@@ -991,7 +1003,7 @@ def root(
     ctx: typer.Context,
     # Legacy: --switch-env ENV
     switch_env: Annotated[Env | None, typer.Option(
-        "--switch-env", is_eager=True, case_sensitive=False, hidden=True,
+        "--switch-env", is_eager=True, hidden=True, parser=_parse_client,
         callback=legacy_switch_env_callback,
         metavar="CLIENT", help="(Deprecated) Use 'client' subcommand instead.",
     )] = None,

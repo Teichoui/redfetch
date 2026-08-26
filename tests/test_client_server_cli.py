@@ -3,9 +3,12 @@ from types import SimpleNamespace
 
 import pytest
 import typer
+from typer.testing import CliRunner
 
 from redfetch import config, main, servers
 from redfetch.main import Env
+
+runner = CliRunner()
 
 
 @pytest.fixture
@@ -251,6 +254,67 @@ def test_blocked_switch_exits_nonzero(cli_env, monkeypatch):
     with pytest.raises(typer.Exit) as exc_info:
         main.server_command(server="thegrind")
     assert exc_info.value.exit_code == 1
+
+
+# Typing a client by label (the CLI parser hook; config.env_token does the matching)
+
+def _cli_calls(monkeypatch):
+    """CliRunner harness: record what the parsed client resolved to instead of switching."""
+    calls = []
+    monkeypatch.setattr(config, "initialize_config", lambda: None)
+    monkeypatch.setattr(main, "_switch_client", lambda token: calls.append(("client", token)))
+    monkeypatch.setattr(main, "initialize_db_only", lambda server=None: (calls.append(("db", server)), ("db", "path"))[1])
+    monkeypatch.setattr(main.asyncio, "run", lambda coro: coro.close())
+    return calls
+
+
+@pytest.mark.parametrize("typed", ["emu", "EMU", "rof2", "RoF2"])
+def test_client_command_accepts_token_or_label(monkeypatch, typed):
+    calls = _cli_calls(monkeypatch)
+    result = runner.invoke(main.app, ["client", typed])
+    assert result.exit_code == 0, result.output
+    assert calls == [("client", "EMU")]
+
+
+def test_server_command_accepts_client_label(monkeypatch):
+    """`redfetch server rof2` switches the client the same way `server emu` does."""
+    calls = _cli_calls(monkeypatch)
+    result = runner.invoke(main.app, ["server", "rof2"])
+    assert result.exit_code == 0, result.output
+    assert calls == [("client", "EMU")]
+
+
+@pytest.mark.parametrize("typed", ["rof2", "EMU"])
+def test_per_run_override_accepts_token_or_label(monkeypatch, typed):
+    calls = _cli_calls(monkeypatch)
+    result = runner.invoke(main.app, ["update", "-s", typed])
+    assert result.exit_code == 0, result.output
+    assert calls == [("db", Env.EMU)]
+
+
+def test_legacy_switch_env_accepts_label(monkeypatch):
+    calls = _cli_calls(monkeypatch)
+    result = runner.invoke(main.app, ["--switch-env", "rof2"])
+    assert result.exit_code == 0, result.output
+    assert calls == [("client", "EMU")]
+
+
+@pytest.mark.parametrize("argv", [["client", "titanium"], ["update", "-s", "titanium"]])
+def test_unknown_client_is_a_usage_error_listing_choices(monkeypatch, argv):
+    calls = _cli_calls(monkeypatch)
+    result = runner.invoke(main.app, argv)
+    assert result.exit_code == 2
+    out = " ".join(result.output.replace("│", " ").split())  # unwrap the error box
+    assert "'titanium' is not a client" in out
+    assert "LIVE, TEST, or EMU (RoF2)" in out  # plain: typer's error box doesn't render markup
+    assert calls == []
+
+
+@pytest.mark.parametrize("command", ["client", "update"])
+def test_help_lists_clients_with_labels(command):
+    result = runner.invoke(main.app, [command, "--help"])
+    assert result.exit_code == 0
+    assert "EMU (RoF2)" in " ".join(result.output.split())
 
 
 # Per-run override flags
