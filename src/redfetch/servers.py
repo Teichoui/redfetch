@@ -68,7 +68,7 @@ def validate_server_slug(slug: str, *, must_be_new: bool = False) -> str:
         raise ValueError(
             f"Invalid server name '{slug}': use lowercase letters, digits, '-' or '_'."
         )
-    if slug.upper() in config.ENVS or slug in RESERVED_SERVER_TOKENS:
+    if config.env_token(slug) or slug in RESERVED_SERVER_TOKENS:
         raise ValueError(f"'{slug}' is a reserved name.")
     if must_be_new:
         for env in config.ENVS:

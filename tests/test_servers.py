@@ -327,9 +327,9 @@ def test_bad_slugs_rejected(slug):
         servers.validate_server_slug(slug)
 
 
-@pytest.mark.parametrize("slug", ["live", "test", "emu", servers.BARE_SETUP_TOKEN])
+@pytest.mark.parametrize("slug", ["live", "test", "emu", "rof2", servers.BARE_SETUP_TOKEN])
 def test_reserved_names_rejected(slug):
-    """Client tokens and the CLI bare-setup token can never become server names."""
+    """Client tokens, client labels, and the CLI bare-setup token can never become server names."""
     with pytest.raises(ValueError, match="reserved"):
         servers.validate_server_slug(slug)
 

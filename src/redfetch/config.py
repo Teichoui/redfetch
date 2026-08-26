@@ -30,6 +30,16 @@ CATEGORY_MAP = {
 ENVS = {"LIVE": "Live", "TEST": "Test", "EMU": "RoF2"}
 DEFAULT_ENV = next(iter(ENVS))  # first client is the default
 
+
+def env_token(value: str) -> str | None:
+    """The client token for text typed as a token or a label, any case; None if neither."""
+    key = value.strip().casefold()
+    for token, label in ENVS.items():
+        if key in (token.casefold(), label.casefold()):
+            return token
+    return None
+
+
 # Envs who have switchable servers (servers.py manages)
 MULTI_SERVER_ENVS = ("EMU",)
 

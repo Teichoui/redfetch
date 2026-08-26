@@ -113,6 +113,19 @@ def test_env_enum_pins_envs():
     assert set(Env) == set(config.ENVS)
 
 
+@pytest.mark.parametrize("typed, token", [
+    ("EMU", "EMU"), ("emu", "EMU"), ("RoF2", "EMU"), ("rof2", "EMU"), (" rof2 ", "EMU"),
+    ("live", "LIVE"), ("Test", "TEST"),
+])
+def test_env_token_accepts_token_or_label_any_case(typed, token):
+    assert config.env_token(typed) == token
+
+
+@pytest.mark.parametrize("typed", ["titanium", "", "lazarus", "emu (rof2)"])
+def test_env_token_rejects_non_clients(typed):
+    assert config.env_token(typed) is None
+
+
 # The bare-setup token
 
 def test_server_none_switches_to_bare_setup(cli_env):
