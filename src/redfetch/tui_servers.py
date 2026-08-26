@@ -1,6 +1,5 @@
 """The Servers tab and its add / rename / delete dialogs."""
 # standard
-import os
 from pathlib import Path
 
 # third-party
@@ -604,9 +603,8 @@ class AddServerScreen(ModalScreen[dict | None]):
         self._sync_destination()
 
     def _default_mode(self) -> str:
-        """The clean copy leads once there's one to provision from."""
-        source = provision.clean_source()
-        return self.PROVISION if source and os.path.exists(source) else self.BROWSE
+        """The clean copy leads once one is remembered."""
+        return self.PROVISION if provision.clean_source() else self.BROWSE
 
     def _is_custom(self) -> bool:
         return self.query_one("#add_known", Select).value == self.CUSTOM

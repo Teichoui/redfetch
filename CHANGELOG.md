@@ -1,9 +1,24 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
+Most notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.6.9] - 2026-08-26
+
+### Added
+- `redfetch agent` prints instructions for your automaton, for those who prefer no ui at all.
+- `redfetch server add <name> --eqpath <folder>` adds an emu server from the command line. `redfetch server --help` for more options.
+- `redfetch config <path>` shows the current setting.
+
+### Changed
+- Opting out of a resource in settings.local.toml will now avoid updating even if watched.
+- `AUTO_RUN_VVMQ` is now `"ask"` (default), `"always"`, or `"never"` instead of unset/true/false. Existing settings migrate.
+- EMU is now labeled RoF2, both values work in CLI.
+
+### Fixed
+- Piping `redfetch` output on Windows no longer crashes on emoji in the help text.
 
 ## [1.6.0] - 2026-08-15
 

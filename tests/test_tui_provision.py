@@ -4,6 +4,7 @@ Same posture as test_tui_routing.py -- no App is mounted, so every widget and
 every app reactive is a plain stand-in.
 """
 import asyncio
+import os
 import threading
 from contextlib import nullcontext
 from pathlib import Path
@@ -395,9 +396,18 @@ def test_dialog_opens_in_provision_mode_once_a_source_is_remembered(monkeypatch,
     assert AddServerScreen._default_mode(screen) == AddServerScreen.PROVISION
 
 
-def test_dialog_falls_back_to_browse_when_the_source_is_gone(monkeypatch, tmp_path):
-    """A remembered path that no longer exists can't be the default answer."""
+def test_dialog_keeps_provision_mode_without_touching_the_source(monkeypatch, tmp_path):
+    """Opening never stats the source: on a sleeping drive that's a multi-second stall.
+    A path that's gone missing is reported on Confirm."""
+    def no_disk(_path):
+        raise AssertionError("dialog open must not touch the source on disk")
+    monkeypatch.setattr(os.path, "exists", no_disk)
     screen, *_ = _dialog(monkeypatch, source=str(tmp_path / "moved.zip"))
+    assert AddServerScreen._default_mode(screen) == AddServerScreen.PROVISION
+
+
+def test_dialog_opens_in_browse_mode_without_a_source(monkeypatch):
+    screen, *_ = _dialog(monkeypatch, source="")
     assert AddServerScreen._default_mode(screen) == AddServerScreen.BROWSE
 
 
