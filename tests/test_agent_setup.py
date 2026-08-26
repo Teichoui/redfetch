@@ -3,16 +3,11 @@ import tomllib
 
 import pytest
 from typer.testing import CliRunner
-from conftest import _install_settings
+from conftest import _install_settings, flat_output
 
 from redfetch import config, main, net, servers, sync_discovery, utils
 
 runner = CliRunner()
-
-
-def _flat_output(result):
-    """Output with rich's error-box line wrapping collapsed, for message matching."""
-    return " ".join(result.output.split())
 
 
 # ===== the shipped agent doc =====
@@ -257,7 +252,7 @@ def test_config_remove_of_shipped_default_is_a_usage_error(config_cli):
     result = runner.invoke(
         main.app, ["config", "PROTECTED_FILES_BY_RESOURCE.1974", "--remove", "CharSelect.cfg"])
     assert result.exit_code == 2
-    assert "shipped default" in _flat_output(result)
+    assert "shipped default" in flat_output(result)
 
 
 def test_config_write_unknown_id_persists_list_and_protects(config_cli):
@@ -313,13 +308,13 @@ def test_config_values_and_add_are_exclusive(config_cli):
         main.app,
         ["config", "PROTECTED_FILES_BY_RESOURCE.1974", "a.ini", "--add", "b.ini"])
     assert result.exit_code == 2
-    assert "not both" in _flat_output(result)
+    assert "not both" in flat_output(result)
 
 
 def test_config_bool_garbage_is_a_usage_error(config_cli):
     result = runner.invoke(main.app, ["config", "SPECIAL_RESOURCES.1974.opt_in", "yeah"])
     assert result.exit_code == 2
-    assert "true or false" in _flat_output(result)
+    assert "true or false" in flat_output(result)
 
 
 # ===== redfetch server add =====
@@ -379,7 +374,7 @@ def test_server_add_surfaces_add_server_errors_as_usage_errors(add_env, tmp_path
     result = runner.invoke(main.app, ["server", "add", "myserver", "--eqpath", str(folder),
                                       "--patcher-url", "https://example.com/patcher.zip"])
     assert result.exit_code == 2
-    assert "file name too" in _flat_output(result)
+    assert "file name too" in flat_output(result)
 
 
 @pytest.fixture
@@ -439,14 +434,14 @@ def test_add_server_persists_guide_and_shortname(tmp_path, monkeypatch):
 def test_server_add_requires_name(add_env):
     result = runner.invoke(main.app, ["server", "add"])
     assert result.exit_code == 2
-    assert "server add" in _flat_output(result)
+    assert "server add" in flat_output(result)
     assert add_env == []
 
 
 def test_server_add_requires_eqpath(add_env):
     result = runner.invoke(main.app, ["server", "add", "myserver"])
     assert result.exit_code == 2
-    assert "--eqpath" in _flat_output(result)
+    assert "--eqpath" in flat_output(result)
     assert add_env == []
 
 
@@ -455,7 +450,7 @@ def test_server_add_rejects_folder_without_eqgame(add_env, tmp_path):
     not_eq.mkdir()
     result = runner.invoke(main.app, ["server", "add", "myserver", "--eqpath", str(not_eq)])
     assert result.exit_code == 2
-    assert "eqgame.exe" in _flat_output(result)
+    assert "eqgame.exe" in flat_output(result)
     assert add_env == []
 
 
@@ -466,7 +461,7 @@ def test_server_add_rejects_reserved_names(tmp_path, monkeypatch):
     folder = _eq_folder(tmp_path)
     result = runner.invoke(main.app, ["server", "add", "none", "--eqpath", str(folder)])
     assert result.exit_code == 2
-    assert "reserved" in _flat_output(result)
+    assert "reserved" in flat_output(result)
     assert "none" not in servers.list_servers("EMU")
 
 
@@ -489,5 +484,5 @@ def test_switch_args_rejected_without_add(add_env, tmp_path):
     folder = _eq_folder(tmp_path)
     result = runner.invoke(main.app, ["server", "lazarus", "--eqpath", str(folder)])
     assert result.exit_code == 2
-    assert "server add" in _flat_output(result)
+    assert "server add" in flat_output(result)
     assert add_env == []

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 import typer
 from typer.testing import CliRunner
+from conftest import flat_output
 
 from redfetch import config, main, servers
 from redfetch.main import Env
@@ -304,7 +305,7 @@ def test_unknown_client_is_a_usage_error_listing_choices(monkeypatch, argv):
     calls = _cli_calls(monkeypatch)
     result = runner.invoke(main.app, argv)
     assert result.exit_code == 2
-    out = " ".join(result.output.replace("│", " ").split())  # unwrap the error box
+    out = flat_output(result)
     assert "'titanium' is not a client" in out
     assert "LIVE, TEST, or EMU (RoF2)" in out  # plain: typer's error box doesn't render markup
     assert calls == []
@@ -314,7 +315,7 @@ def test_unknown_client_is_a_usage_error_listing_choices(monkeypatch, argv):
 def test_help_lists_clients_with_labels(command):
     result = runner.invoke(main.app, [command, "--help"])
     assert result.exit_code == 0
-    assert "EMU (RoF2)" in " ".join(result.output.split())
+    assert "EMU (RoF2)" in flat_output(result)
 
 
 # Per-run override flags

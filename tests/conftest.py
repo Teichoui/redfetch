@@ -2,8 +2,14 @@
 import os
 
 from dynaconf import Dynaconf
+from rich.text import Text
 
 from redfetch import config
+
+
+def flat_output(result):
+    """CLI output as plain text: ANSI styling stripped, rich's box wrapping collapsed."""
+    return " ".join(Text.from_ansi(result.output).plain.replace("│", " ").split())
 
 
 def _install_settings(tmp_path, monkeypatch, local_toml="", bundle_toml=None, env="EMU",
