@@ -36,7 +36,7 @@ class _TuiPostUpdate:
             RunVVMQScreen.RESPONSE_NEVER: "never",
         }.get(response, "no")
 
-    def auto_run_persisted(self, value: bool) -> None:
+    def auto_run_persisted(self, value: str) -> None:
         # config already written; the handler skips the no-op write and syncs the radio set
         self.app.handle_toggle_auto_run_vvmq(value)
 

@@ -226,7 +226,7 @@ class SettingsTab(ScrollableContainer):
             yield Label("Start MQ post-update:", classes="left_middle")
             yield make_tristate(
                 "auto_run_vvmq",
-                config.settings.from_env(current_env).get("AUTO_RUN_VVMQ", None),
+                config.settings.from_env(current_env).get("AUTO_RUN_VVMQ"),
             )
             yield Label("Also start post-update:", classes="left_middle")
             yield make_launch_toggles(set(utils.get_post_update_targets(current_env)))
@@ -322,7 +322,7 @@ class SettingsTab(ScrollableContainer):
         # Update env-specific switches
         auto_run_vvmq_radio = self.query_one("#auto_run_vvmq", RadioSet)
         with self.prevent(RadioSet.Changed):
-            set_tristate(auto_run_vvmq_radio, settings_for_env.get("AUTO_RUN_VVMQ", None))
+            set_tristate(auto_run_vvmq_radio, settings_for_env.get("AUTO_RUN_VVMQ"))
 
         # Keep the per-env launch toggles from writing back during app sync.
         enabled_targets = set(utils.get_post_update_targets(app.current_env))

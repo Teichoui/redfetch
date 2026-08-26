@@ -177,6 +177,14 @@ def test_patcher_entry_hides_without_a_server_patcher(monkeypatch):
     assert shortcuts.runnable_tooltip(r) == "Run the emu server's own patcher."
 
 
+def test_patcher_entry_shows_for_a_patcher_without_a_link(monkeypatch):
+    """A patcher the user already has (from a friend) still runs; only the download is off."""
+    _active_server(monkeypatch, patcher_url="", patcher_exe="LazarusPatcherCLI.exe")
+    r = shortcuts.find_runnable("patcher")
+    assert shortcuts.runnable_visible(r) is True
+    assert shortcuts.runnable_executable(r) == "LazarusPatcherCLI.exe"
+
+
 def test_patcher_entry_rejects_a_hostile_exe_name(monkeypatch):
     """A custom server's exe name is user-authored, so running it uses the bootstrap's gate."""
     _active_server(monkeypatch, patcher_exe="..\\..\\Windows\\System32\\calc.exe")

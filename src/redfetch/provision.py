@@ -592,7 +592,7 @@ async def provision(slug: str, *, env: str, source: str, destination: str,
     _report(progress, FINISHING_LABEL)
 
     notices: list[str] = []
-    if patcher.has_patcher(ctx):
+    if patcher.has_download(ctx):
         _report(progress, f"Installing the {ctx.label} patcher")
         try:
             await patcher.install(ctx)

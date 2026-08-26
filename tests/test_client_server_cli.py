@@ -1,5 +1,4 @@
 """Tests for switching client environments and emu servers."""
-import inspect
 from types import SimpleNamespace
 
 import pytest
@@ -245,12 +244,12 @@ def test_blocked_switch_exits_nonzero(cli_env, monkeypatch):
 
 def test_server_flags_carry_client_alias():
     """--client is accepted everywhere --server is, so callers can migrate."""
-    flagged = []
-    for info in main.app.registered_commands:
-        for param in inspect.signature(info.callback).parameters.values():
-            decls = getattr(param.default, "param_decls", None) or ()
-            if "--server" in decls:
-                flagged.append((info.callback.__name__, decls))
+    flagged = [
+        (name, param.opts)
+        for name, command in typer.main.get_command(main.app).commands.items()
+        for param in command.params
+        if "--server" in param.opts
+    ]
     assert flagged
-    for name, decls in flagged:
-        assert "--client" in decls, f"{name}'s --server lacks the --client alias"
+    for name, opts in flagged:
+        assert "--client" in opts, f"{name}'s --server lacks the --client alias"

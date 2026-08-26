@@ -505,7 +505,7 @@ class FakeSurface:
         self.cold_choice = cold_choice
         self.eq_close_ok = eq_close_ok
         self.notices: list[str] = []
-        self.ui_synced: list[bool] = []
+        self.ui_synced: list[str] = []
         self.asked_restart = 0
         self.asked_cold = 0
         self.waited_eq = 0
@@ -535,10 +535,10 @@ FRESH = frozenset({"fresh.exe"})
 
 @pytest.fixture
 def exec_env(monkeypatch):
-    """Windows, non-CI, MQ configured, EQ not running, AUTO_RUN_VVMQ unset."""
+    """Windows, non-CI, MQ configured, EQ not running, AUTO_RUN_VVMQ "ask"."""
     monkeypatch.delenv("CI", raising=False)
     monkeypatch.setattr(post_update.sys, "platform", "win32")
-    monkeypatch.setattr(post_update.config, "settings", _AutoRunSettings(None))
+    monkeypatch.setattr(post_update.config, "settings", _AutoRunSettings("ask"))
     monkeypatch.setattr(post_update.utils, "should_offer_mq_start", lambda running=None: True)
 
     calls = {"restarted": [], "started": [], "eq_pids": [], "persisted": [], "loadouts": [], "commands": []}
@@ -603,10 +603,10 @@ def test_execute_restart_uses_fresh_rescan_for_loadout(exec_env):
     assert calls["loadouts"] == [FRESH]      # not the stale snapshot
 
 
-@pytest.mark.parametrize("auto_run", [True, False])
+@pytest.mark.parametrize("auto_run", ["always", "never"])
 def test_execute_restart_always_asks_regardless_of_auto_run(exec_env, auto_run):
     # Hard constraint: AUTO_RUN_VVMQ auto-consents only to cold starts. A restart of a
-    # running session always prompts, and False doesn't suppress the offer either.
+    # running session always prompts, and "never" doesn't suppress the offer either.
     monkeypatch, calls = exec_env
     monkeypatch.setattr(post_update.config, "settings", _AutoRunSettings(auto_run))
     surface = FakeSurface()
@@ -665,9 +665,10 @@ def test_execute_cold_start_aborts_when_mq_appeared_during_prompt(exec_env):
     assert any("already running" in msg for msg, _ in surface.notices)
 
 
-def test_execute_cold_start_auto_true_skips_prompt(exec_env):
+@pytest.mark.parametrize("auto_run", ["always", "Always"])  # hand-edits may vary case
+def test_execute_cold_start_always_skips_prompt(exec_env, auto_run):
     monkeypatch, calls = exec_env
-    monkeypatch.setattr(post_update.config, "settings", _AutoRunSettings(True))
+    monkeypatch.setattr(post_update.config, "settings", _AutoRunSettings(auto_run))
     surface = FakeSurface()
     _execute(surface, post_update.Decision.COLD_START)
     assert surface.asked_cold == 0
@@ -675,9 +676,20 @@ def test_execute_cold_start_auto_true_skips_prompt(exec_env):
     assert calls["loadouts"] == [FRESH]
 
 
-def test_execute_cold_start_auto_false_is_silent_noop(exec_env):
+def test_execute_cold_start_garbage_value_reads_as_ask(exec_env):
+    # A stored value outside the tri-state vocabulary must ask, matching how
+    # the TUI displays it — never silently suppress or auto-consent.
     monkeypatch, calls = exec_env
-    monkeypatch.setattr(post_update.config, "settings", _AutoRunSettings(False))
+    monkeypatch.setattr(post_update.config, "settings", _AutoRunSettings("yeah"))
+    surface = FakeSurface(cold_choice="yes")
+    _execute(surface, post_update.Decision.COLD_START)
+    assert surface.asked_cold == 1
+    assert calls["started"] == [("C:\\VanillaMQ", "MacroQuest.exe")]
+
+
+def test_execute_cold_start_never_is_silent_noop(exec_env):
+    monkeypatch, calls = exec_env
+    monkeypatch.setattr(post_update.config, "settings", _AutoRunSettings("never"))
     surface = FakeSurface()
     _execute(surface, post_update.Decision.COLD_START)
     assert surface.asked_cold == 0 and calls["started"] == []
@@ -699,7 +711,7 @@ def test_execute_cold_start_failure_notifies_and_skips_loadout(exec_env):
 
 @pytest.mark.parametrize(
     "choice, starts, persisted",
-    [("yes", True, []), ("no", False, []), ("always", True, [True]), ("never", False, [False])],
+    [("yes", True, []), ("no", False, []), ("always", True, ["always"]), ("never", False, ["never"])],
 )
 def test_execute_cold_start_choice_matrix(exec_env, choice, starts, persisted):
     monkeypatch, calls = exec_env
@@ -901,7 +913,7 @@ def tui_surface_cls():
     from redfetch import config
 
     if config.settings is None:
-        config.settings = _AutoRunSettings(None)
+        config.settings = _AutoRunSettings("ask")
     from redfetch.tui_modals import _TuiPostUpdate
 
     return _TuiPostUpdate

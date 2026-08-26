@@ -111,10 +111,17 @@ def test_non_bare_filenames_rejected(name):
 
 # --- gates ---------------------------------------------------------------------
 
-def test_has_patcher_needs_both_url_and_exe(tmp_path):
+def test_has_patcher_needs_only_the_exe(tmp_path):
+    """The name is what runs; a patcher from a friend has no link."""
     assert patcher.has_patcher(_ctx(tmp_path)) is True
-    assert patcher.has_patcher(_ctx(tmp_path, url="")) is False
+    assert patcher.has_patcher(_ctx(tmp_path, url="")) is True
     assert patcher.has_patcher(_ctx(tmp_path, exe="")) is False
+
+
+def test_has_download_needs_both_url_and_exe(tmp_path):
+    assert patcher.has_download(_ctx(tmp_path)) is True
+    assert patcher.has_download(_ctx(tmp_path, url="")) is False
+    assert patcher.has_download(_ctx(tmp_path, exe="")) is False
 
 
 def test_is_installed_tracks_the_exe_on_disk(tmp_path):

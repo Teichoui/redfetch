@@ -1,7 +1,6 @@
 """Tests for uninstall cleanup."""
 
 import shlex
-from pathlib import Path
 
 import pytest
 

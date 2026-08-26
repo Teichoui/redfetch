@@ -24,6 +24,7 @@ from textual.worker import Worker, WorkerState, WorkerFailed, get_current_worker
 from textual.screen import Screen
 
 # local
+from redfetch import detecteq
 from redfetch import store
 from redfetch import api
 from redfetch import auth
@@ -433,7 +434,7 @@ class Redfetch(App):
                 settings_tab = main_screen.query_one(SettingsTab)
                 settings_tab.update_vvmq_path_display()
                 self.notify("Download folder updated" if input_value else "Download folder cleared")
-                if utils.validate_file_in_path(input_value, 'eqgame.exe'):
+                if detecteq.is_valid_eq_dir(input_value):
                     self.notify(
                         "Heads up: eqgame.exe is in this folder, which looks like your EverQuest directory. That's a bad place for downloads.",
                         severity="warning",
@@ -443,7 +444,7 @@ class Redfetch(App):
                 self.notify(f"Invalid Download Folder: {e}", severity="error")
         elif input_id in ("eq_path_input", "server_eq_path_input"):
             # One branch for both copies of the setting: Settings tab and Servers tab.
-            if utils.validate_file_in_path(input_value, 'eqgame.exe'):
+            if detecteq.is_valid_eq_dir(input_value):
                 try:
                     config.update_setting(['EQPATH'], input_value, env=self.current_env)
                     self.eq_path = input_value
@@ -474,7 +475,7 @@ class Redfetch(App):
                 try:
                     config.update_setting(['SPECIAL_RESOURCES', vvmq_id, 'custom_path'], input_value, env=self.current_env)
                     self.notify("Very Vanilla MQ folder updated" if input_value else "Very Vanilla MQ folder cleared")
-                    if utils.validate_file_in_path(input_value, 'eqgame.exe'):
+                    if detecteq.is_valid_eq_dir(input_value):
                         self.notify(
                             "Heads up: eqgame.exe is in this folder, which looks like your EverQuest directory. MacroQuest shouldn't live inside EverQuest.",
                             severity="warning",
@@ -598,9 +599,10 @@ class Redfetch(App):
             state = "enabled" if value else "disabled"
             self.notify(f"Background updates for {config.ENVS[self.current_env]} are now {state}")
 
-    def handle_toggle_auto_run_vvmq(self, value) -> None:
+    def handle_toggle_auto_run_vvmq(self, value: str) -> None:
         main_screen = self._get_main_screen()
-        current_value = config.settings.from_env(self.current_env).get('AUTO_RUN_VVMQ', None)
+        current_value = config.normalize_tristate(
+            config.settings.from_env(self.current_env).get('AUTO_RUN_VVMQ'))
         if current_value != value:
             config.update_setting(['AUTO_RUN_VVMQ'], value, env=self.current_env)
             self.notify(f"Start MQ post-update set to {tristate_label(value)}.")
@@ -637,8 +639,9 @@ class Redfetch(App):
             self.notify(f"Post-update launch of {label} enabled.")
 
         if enabled and target == "myseq":
-            auto_run = config.settings.from_env(self.current_env).get("AUTO_RUN_VVMQ", None)
-            if auto_run is not True:
+            auto_run = config.normalize_tristate(
+                config.settings.from_env(self.current_env).get("AUTO_RUN_VVMQ"))
+            if auto_run != "always":
                 self.notify(
                     "RedGuides strongly recommends using MySEQ only with MQ. "
                     "Consider setting 'Start MQ post-update' to Yes.",
@@ -746,7 +749,7 @@ class Redfetch(App):
                 or self.laa_enable_running or self.provision_running):
             return False
         context = servers.active_server_context(self.current_env)
-        if not patcher.has_patcher(context):
+        if not patcher.has_download(context):
             return False
         self.patcher_install_running = True
         self.notify(f"Downloading the {context.label} patcher...", markup=False)

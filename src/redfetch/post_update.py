@@ -32,7 +32,7 @@ class PostUpdateSurface(Protocol):
     def notify(self, message: str, *, error: bool = False) -> None: ...
     async def confirm_restart(self) -> bool: ...
     async def ask_cold_start(self) -> ColdStartChoice: ...
-    def auto_run_persisted(self, value: bool) -> None: ...  # Refresh UI state; the write already happened.
+    def auto_run_persisted(self, value: str) -> None: ...  # Refresh UI state; the write already happened.
     async def wait_for_eq_close(self) -> bool: ...
 
 
@@ -123,15 +123,14 @@ def _launch_loadout(surface: PostUpdateSurface, running: set[str] | None) -> Non
 
 
 async def _cold_start_consent(surface: PostUpdateSurface) -> bool:
-    auto_run = config.active_settings().get("AUTO_RUN_VVMQ", None)
-    if auto_run is not None:
-        return bool(auto_run)
+    auto_run = config.normalize_tristate(config.active_settings().get("AUTO_RUN_VVMQ"))
+    if auto_run != "ask":
+        return auto_run == "always"
     choice = await surface.ask_cold_start()
     if choice in ("always", "never"):
-        value = choice == "always"
-        config.update_setting(["AUTO_RUN_VVMQ"], value)
-        surface.notify(f"Updated settings to {'always' if value else 'never'} start MacroQuest after an update run.")
-        surface.auto_run_persisted(value)
+        config.update_setting(["AUTO_RUN_VVMQ"], choice)
+        surface.notify(f"Updated settings to {choice} start MacroQuest after an update run.")
+        surface.auto_run_persisted(choice)
     elif choice == "no":
         surface.notify("Not starting MacroQuest.")
     return choice in ("yes", "always")

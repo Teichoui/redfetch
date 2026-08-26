@@ -58,8 +58,12 @@ def _fake_settings(env="LIVE"):
     settings.validators = SimpleNamespace(
         validate=lambda: calls.__setitem__("validated", calls["validated"] + 1)
     )
-    # Nothing persisted -> per-env reads fall back to code defaults (e.g. AUTO_UPDATE on).
-    settings.from_env = lambda _env: SimpleNamespace(get=lambda key, default=None: default)
+    # Nothing persisted -> reads see the settings.toml [DEFAULT] values
+    # (e.g. AUTO_UPDATE on), mirrored here.
+    bundled_defaults = {"AUTO_UPDATE": True}
+    settings.from_env = lambda _env: SimpleNamespace(
+        get=lambda key, default=None: bundled_defaults.get(key, default)
+    )
     return settings, calls
 
 
@@ -86,7 +90,7 @@ def test_check_command_uses_ephemeral_env(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "DEFAULT_CONFIG_DIR", str(tmp_path))
     monkeypatch.setattr(config, "initialize_config", lambda: settings)
     monkeypatch.setattr("redfetch.config_firstrun.is_configured", lambda *a, **k: True)
-    monkeypatch.setattr(main, "_has_auth_credentials", lambda: True)
+    monkeypatch.setattr(main.auth, "has_stored_credentials", lambda: True)
     monkeypatch.setattr(main.auth, "initialize_keyring", lambda: None)
     monkeypatch.setattr(main.store, "initialize_db", lambda db_name: None)
     monkeypatch.setattr(main.store, "get_db_path", lambda db_name: ":memory:")
@@ -145,7 +149,7 @@ def test_check_command_needs_login_writes_verdict(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "initialize_config", lambda: settings)
     monkeypatch.setattr("redfetch.config_firstrun.is_configured", lambda *a, **k: True)
     monkeypatch.setattr(main.auth, "initialize_keyring", lambda: None)
-    monkeypatch.setattr(main, "_has_auth_credentials", lambda: False)
+    monkeypatch.setattr(main.auth, "has_stored_credentials", lambda: False)
     monkeypatch.setattr(main.utils, "get_vvmq_path", lambda: r"D:\MQ\VanillaMQ_LIVE")
 
     def _must_not_run(*a, **k):

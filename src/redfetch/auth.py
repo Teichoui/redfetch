@@ -373,6 +373,16 @@ async def fetch_username(api_key, cache=True):
     return "Unknown"
 
 
+def has_stored_credentials() -> bool:
+    """Peek at env / keyring for credentials without touching the network."""
+    if os.environ.get('REDGUIDES_API_KEY'):
+        return True
+    return bool(
+        keyring.get_password(KEYRING_SERVICE_NAME, "access_token")
+        or keyring.get_password(KEYRING_SERVICE_NAME, "refresh_token")
+    )
+
+
 async def get_api_headers():
     """Return auth headers for XenForo API requests.
 

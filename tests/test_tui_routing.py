@@ -232,6 +232,15 @@ def test_patcher_button_names_the_missing_exe(tmp_path):
     assert "patcher_exe" in button.tooltip.plain
 
 
+def test_patcher_button_explains_a_patcher_with_no_link(tmp_path):
+    """An exe-only entry (a patcher from a friend) has nothing to fetch: say where to put it."""
+    own = _context(tmp_path, patcher_url="")
+    button = _patcher_button(context=own)
+    assert button.disabled is True
+    assert "LazarusPatcherCLI.exe" in button.tooltip.plain
+    assert "download link" in button.tooltip.plain
+
+
 @pytest.mark.parametrize(
     "flag", ["patcher_install_running", "laa_enable_running", "provision_running"])
 def test_install_active_patcher_refuses_while_busy(flag):
@@ -311,17 +320,18 @@ def test_add_dialog_without_a_patcher_still_adds(monkeypatch, tmp_path):
 
 
 def test_add_dialog_requires_the_file_name_with_a_link(monkeypatch, tmp_path):
-    """A URL alone can never satisfy has_patcher — refuse it where the user can fix it."""
+    """A URL alone has nothing to save the download as — refuse it where the user can fix it."""
     dismissed, errors = _confirm_custom(
         monkeypatch, tmp_path, url="https://myserver.example/patcher.zip")
     assert not dismissed
     assert "file name" in errors[0]
 
 
-def test_add_dialog_requires_the_link_with_a_file_name(monkeypatch, tmp_path):
+def test_add_dialog_accepts_a_file_name_without_a_link(monkeypatch, tmp_path):
+    """A patcher the user already has: nothing to fetch, still something to run."""
     dismissed, errors = _confirm_custom(monkeypatch, tmp_path, exe="MyPatcher.exe")
-    assert not dismissed
-    assert "download link" in errors[0]
+    assert errors == []
+    assert (dismissed[0]["patcher_url"], dismissed[0]["patcher_exe"]) == ("", "MyPatcher.exe")
 
 
 def test_add_dialog_rejects_a_hostile_exe_name(monkeypatch, tmp_path):

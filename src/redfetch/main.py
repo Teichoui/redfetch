@@ -1,11 +1,14 @@
 # standard imports
+import json
 import sys
 import os
 import signal
 import threading
 from contextlib import contextmanager
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from typing import Annotated
 import asyncio
 
 # third-party imports
@@ -19,6 +22,7 @@ import typer
 from redfetch import api
 from redfetch import auth
 from redfetch import config
+from redfetch import detecteq
 from redfetch import meta
 from redfetch import net
 from redfetch import post_update
@@ -30,6 +34,7 @@ from redfetch import push
 from redfetch import sync
 from redfetch import store
 from redfetch import shortcuts
+from redfetch import update_status
 from redfetch.runtime_errors import exit_with_fatal_error
 from redfetch.sync_types import SyncOutcome
 
@@ -42,18 +47,49 @@ app = typer.Typer(
 console = Console()
 
 
+# ===== CLI helpers =====
+
 class Env(str, Enum):
     LIVE = "LIVE"
     TEST = "TEST"
     EMU = "EMU"
 
 
-def parse_resource_id_or_fail(value: str) -> str:
-    """Accept either an integer ID or a URL that includes a recognizable ID."""
+
+_CLIENT_COLORS = ("green", "yellow", "cyan", "magenta", "blue")
+
+
+def _client_choices(conjunction: str = "or") -> str:
+    """Help-text list of clients from config.ENVS."""
+    colored = [
+        f"[{_CLIENT_COLORS[i % len(_CLIENT_COLORS)]}]{token}[/]"
+        + ("" if label.casefold() == token.casefold() else f" ({label})")
+        for i, (token, label) in enumerate(config.ENVS.items())
+    ]
+    return f"{', '.join(colored[:-1])}, {conjunction} {colored[-1]}"
+
+
+def _client_option(help_text: str = "Use this client for this run only, without changing your active client."):
+    return typer.Option("--client", "--server", "-s", case_sensitive=False, help=help_text)
+
+
+_Client = Annotated[Env | None, _client_option()]
+
+
+@contextmanager
+def _usage_errors():
+    """When libraries throw a ValueError, convert it to BadParameter."""
     try:
-        return utils.parse_resource_id(value.strip())
+        yield
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
+
+
+def _require_eq_folder(folder: str) -> None:
+    if not folder:
+        raise typer.BadParameter("An EverQuest folder is required.")
+    if not detecteq.is_valid_eq_dir(folder):
+        raise typer.BadParameter(f"No eqgame.exe in {folder}, so it isn't an EverQuest folder.")
 
 
 def _apply_server_override(server: Env | None = None) -> None:
@@ -79,8 +115,6 @@ def initialize_db_only(server: Env | None = None):
     db_path = store.get_db_path(db_name)
     return db_name, db_path
 
-
-# ===== CLI prompt helpers =====
 
 class _CliPostUpdate:
     """CLI adapter for post_update.execute: rich prompts, console output."""
@@ -109,7 +143,7 @@ class _CliPostUpdate:
         except (KeyboardInterrupt, EOFError):
             return "no"  # headless/no-stdin: don't start MacroQuest
 
-    def auto_run_persisted(self, value: bool) -> None:
+    def auto_run_persisted(self, value: str) -> None:
         pass  # the policy notifies; nothing to sync in the CLI
 
     async def wait_for_eq_close(self) -> bool:
@@ -174,9 +208,9 @@ async def download_command_async(db_name: str, db_path: str, id_or_url: str, for
     rich_help_panel="📦 Resource Management"
 )
 def update_command(
-    force: bool = typer.Option(False, "--force", "-f", help="Force re-download of all watched resources."),
-    server: Env | None = typer.Option(None, "--server", "--client", "-s", case_sensitive=False, help="Update this client for this run only, without changing your active client ([green]LIVE[/green], [yellow]TEST[/yellow], [cyan]EMU[/cyan])."),
-    headless: bool = typer.Option(False, "--headless", hidden=True, help="MQ silent update: no prompts, no browser, no dialogs. writes update_status.json."),
+    force: Annotated[bool, typer.Option("--force", "-f", help="Force re-download of all watched resources.")] = False,
+    server: _Client = None,
+    headless: Annotated[bool, typer.Option("--headless", hidden=True, help="MQ silent update: no prompts, no browser, no dialogs. writes update_status.json.")] = False,
 ):
     if headless:
         _headless_update(server=server, force=force)
@@ -196,53 +230,65 @@ def _exit_silently_on_error():
         raise typer.Exit(1)
 
 
-def _headless_update(server: Env | None, force: bool) -> None:
+@dataclass(frozen=True, slots=True)
+class _HeadlessSession:
+    """What `check` and `update --headless` share once the env is settled."""
+    env: str
+    managed_path: str | None  # MQ matches this against its own root to ignore stray copies.
+    auto_update: bool
+    db_name: str
+    db_path: str
+
+    def write_status(self, **fields) -> None:
+        update_status.write_update_status(
+            env=self.env, managed_path=self.managed_path, auto_update=self.auto_update, **fields,
+        )
+
+
+def _headless_session(server: Env | None, *, require_auto_update: bool = False) -> _HeadlessSession:
+    """Settle the env and open the DB. With no config or no login, write status and exit 0."""
     from redfetch.config_firstrun import is_configured
-    from redfetch import update_status
 
     requested_env = server.value if server else None
+    if not is_configured():
+        update_status.write_update_status(
+            env=requested_env or config.DEFAULT_ENV, auth_state="not_configured",
+        )
+        raise typer.Exit(0)
 
+    config.initialize_config()
+    if requested_env:
+        config.select_environment_in_memory(requested_env)
+    env = config.settings.ENV
+    auth.initialize_keyring()
+
+    auto_update = utils.is_auto_update_enabled()
+    if require_auto_update and not auto_update:
+        raise typer.Exit(1)
+    managed_path = utils.get_vvmq_path()
+    if not auth.has_stored_credentials():
+        update_status.write_update_status(
+            env=env, auth_state="needs_login", managed_path=managed_path, auto_update=auto_update,
+        )
+        raise typer.Exit(0)
+
+    db_name = store.db_name(env)
+    store.initialize_db(db_name)
+    return _HeadlessSession(env, managed_path, auto_update, db_name, store.get_db_path(db_name))
+
+
+def _headless_update(server: Env | None, force: bool) -> None:
     with _exit_silently_on_error():
-        if not is_configured():
-            update_status.write_update_status(
-                env=requested_env or Env.LIVE.value,
-                auth_state="not_configured",
-            )
-            raise typer.Exit(0)
-
-        config.initialize_config()
-        if requested_env:
-            config.select_environment_in_memory(requested_env)
-        env = config.settings.ENV
-        auth.initialize_keyring()
-
-        auto_update = utils.is_auto_update_enabled()
-        if not auto_update:
-            raise typer.Exit(1)
-
-        managed_path = utils.get_vvmq_path()
-
-        if not _has_auth_credentials():
-            update_status.write_update_status(
-                env=env, auth_state="needs_login", managed_path=managed_path, auto_update=auto_update,
-            )
-            raise typer.Exit(0)
-
-        db_name = store.db_name(env)
-        store.initialize_db(db_name)
-        db_path = store.get_db_path(db_name)
-
+        session = _headless_session(server, require_auto_update=True)
         if force:
-            with store.get_db_connection(db_name) as conn:
+            with store.get_db_connection(session.db_name) as conn:
                 store.reset_download_dates(conn.cursor())
 
-        outcome = asyncio.run(_headless_update_async(db_path))
+        outcome = asyncio.run(_headless_update_async(session.db_path))
 
         if outcome is None:
             # Mid-run silent-refresh failure handling
-            update_status.write_update_status(
-                env=env, auth_state="needs_login", managed_path=managed_path, auto_update=auto_update,
-            )
+            session.write_status(auth_state="needs_login")
             raise typer.Exit(0)
 
         if outcome.execution_plan is None or outcome.execution_result is None:
@@ -253,16 +299,13 @@ def _headless_update(server: Env | None, force: bool) -> None:
         )
         vvmq_version = None
         if outcome.vvmq_updated:
-            vvmq_id = utils.get_current_vvmq_id(env)
+            vvmq_id = utils.get_current_vvmq_id(session.env)
             vvmq_version = next(
                 (item["version"] for item in installed if item["resource_id"] == vvmq_id), None
             )
-        update_status.write_update_status(
-            env=env,
+        session.write_status(
             auth_state="ok",
             items=remaining,
-            managed_path=managed_path,
-            auto_update=auto_update,
             installed=installed,
             pending_restart=outcome.vvmq_updated,
             pending_restart_version=vvmq_version,
@@ -283,30 +326,24 @@ async def _headless_update_async(db_path: str) -> SyncOutcome | None:
     return await sync.run_sync(db_path, headers)
 
 
+def parse_resource_id_or_fail(value: str) -> str:
+    """Accept either an integer ID or a RedGuides URL that includes a recognizable ID."""
+    with _usage_errors():
+        return utils.parse_resource_id(value.strip())
+
+
 @app.command(
     "download",
     help="Download a specific resource by ID or URL.",
     rich_help_panel="📦 Resource Management"
 )
 def download(
-    id_or_url: str = typer.Argument(..., metavar="ID_OR_URL", help="RedGuides resource ID or URL"),
-    force: bool = typer.Option(False, "--force", "-f", help="Force re-download by resetting this resource's download date."),
-    server: Env | None = typer.Option(None, "--server", "--client", "-s", case_sensitive=False, help="Download for this client for this run only, without changing your active client ([green]LIVE[/green], [yellow]TEST[/yellow], [cyan]EMU[/cyan])."),
+    id_or_url: Annotated[str, typer.Argument(metavar="ID_OR_URL", help="RedGuides resource ID or URL")],
+    force: Annotated[bool, typer.Option("--force", "-f", help="Force re-download by resetting this resource's download date.")] = False,
+    server: _Client = None,
 ):
     db_name, db_path = initialize_db_only(server=server)
     asyncio.run(download_command_async(db_name=db_name, db_path=db_path, id_or_url=id_or_url, force=force))
-
-
-def _has_auth_credentials() -> bool:
-    """Peek at env / keyring for stored credentials (no network, no init)."""
-    if os.environ.get("REDGUIDES_API_KEY"):
-        return True
-    try:
-        import keyring
-        token = keyring.get_password(auth.KEYRING_SERVICE_NAME, "access_token")
-        return token is not None
-    except Exception:
-        return False
 
 
 @app.command(
@@ -316,57 +353,15 @@ def _has_auth_credentials() -> bool:
     ),
     rich_help_panel="📦 Resource Management",
 )
-def check_command(
-    server: Env | None = typer.Option(
-        None, "--server", "--client", "-s", case_sensitive=False,
-        help="Check this client for this run only, without changing your active client ([green]LIVE[/green], [yellow]TEST[/yellow], [cyan]EMU[/cyan]).",
-    ),
-):
-    from redfetch.config_firstrun import is_configured
-    from redfetch import update_status
-
-    requested_env = server.value if server else None
-
+def check_command(server: _Client = None):
     with _exit_silently_on_error():
-        if not is_configured():
-            update_status.write_update_status(
-                env=requested_env or Env.LIVE.value,
-                auth_state="not_configured",
-            )
-            raise typer.Exit(0)
-
-        config.initialize_config()
-        # Honor --server for this run only; never persist (a "check" must not change the user's env).
-        if requested_env:
-            config.select_environment_in_memory(requested_env)
-        env = config.settings.ENV
-        auth.initialize_keyring()
-
-        # MQ matches this against its own root to ignore stray copies.
-        managed_path = utils.get_vvmq_path()
-
-        auto_update = utils.is_auto_update_enabled()
-
-        if not _has_auth_credentials():
-            update_status.write_update_status(
-                env=env, auth_state="needs_login", managed_path=managed_path, auto_update=auto_update,
-            )
-            raise typer.Exit(0)
-
-        db_name = store.db_name(env)
-        store.initialize_db(db_name)
-        db_path = store.get_db_path(db_name)
-
-        auth_state, items = asyncio.run(_check_command_async(db_path))
-        update_status.write_update_status(
-            env=env, auth_state=auth_state, items=items, managed_path=managed_path, auto_update=auto_update,
-        )
+        session = _headless_session(server)
+        auth_state, items = asyncio.run(_check_command_async(session.db_path))
+        session.write_status(auth_state=auth_state, items=items)
         raise typer.Exit(0)
 
 
 async def _check_command_async(db_path: str) -> tuple[str, list[dict] | None]:
-    from redfetch import update_status
-
     try:
         headers = await auth.get_api_headers()
     except RuntimeError:
@@ -413,8 +408,8 @@ def _print_shortcut_table(entries, available, describe) -> None:
     rich_help_panel="🔧 System & Utilities",
 )
 def run_shortcut_command(
-    target: str | None = typer.Argument(None, metavar="SHORTCUT", help="Shortcut to run: vvmq, eqbcs, eq, eqgame, etc."),
-    server: Env | None = typer.Option(None, "--server", "--client", "-s", case_sensitive=False, help="Run for this client this run only, without changing your active client ([green]LIVE[/green], [yellow]TEST[/yellow], [cyan]EMU[/cyan])."),
+    target: Annotated[str | None, typer.Argument(metavar="SHORTCUT", help="Shortcut to run: vvmq, eqbcs, eq, eqgame, etc.")] = None,
+    server: _Client = None,
 ):
     config.initialize_config()
     _apply_server_override(server)
@@ -451,8 +446,8 @@ def run_shortcut_command(
     rich_help_panel="🔧 System & Utilities",
 )
 def open_shortcut_command(
-    target: str | None = typer.Argument(None, metavar="SHORTCUT", help="Folder/file to open: downloads, vvmq, eq, etc."),
-    server: Env | None = typer.Option(None, "--server", "--client", "-s", case_sensitive=False, help="Resolve paths for this client this run only, without changing your active client ([green]LIVE[/green], [yellow]TEST[/yellow], [cyan]EMU[/cyan])."),
+    target: Annotated[str | None, typer.Argument(metavar="SHORTCUT", help="Folder/file to open: downloads, vvmq, eq, etc.")] = None,
+    server: _Client = None,
 ):
     config.initialize_config()
     _apply_server_override(server)
@@ -525,21 +520,48 @@ def resources_reset_command():
 
 @app.command(
     "config",
-    help="Update a setting by path and value.",
+    help="Read or update a setting by path. Give no value to print the current one.",
     rich_help_panel="🍔 Configuration"
 )
 def config_command(
-    path: str = typer.Argument(..., metavar="SETTING_PATH", help="Dot-separated setting path (e.g., SPECIAL_RESOURCES.1974.opt_in)"),
-    value: str = typer.Argument(..., metavar="VALUE", help="New value for the setting"),
-    server: Env | None = typer.Option(None, "--server", "--client", "-s", case_sensitive=False, help="Client to apply the change in ([green]LIVE[/green], [yellow]TEST[/yellow], [cyan]EMU[/cyan])"),
+    path: Annotated[str, typer.Argument(metavar="SETTING_PATH", help="Dot-separated setting path (e.g., SPECIAL_RESOURCES.1974.opt_in)")],
+    values: Annotated[list[str], typer.Argument(help="New value. List settings take multiple values (e.g. a.ini b.ini). Omit to print the current value.")] = [],
+    add_entries: Annotated[list[str], typer.Option("--add", metavar="ENTRY", help="Append an entry to a list setting (e.g. a protected file).")] = [],
+    remove_entries: Annotated[list[str], typer.Option("--remove", metavar="ENTRY", help="Remove an entry from a list setting.")] = [],
+    server: Annotated[Env | None, _client_option("Client to apply the change in.")] = None,
 ):
+    list_edits = bool(add_entries or remove_entries)
+
     config.initialize_config()
-    setting_path_list = path.split('.')
-    config.update_setting(setting_path_list, value, server.value if server else None)
-    settings_env = server.value if server else config.settings.ENV
-    db_name = store.db_name(settings_env)
-    store.initialize_db(db_name)
-    console.print(f"Updated setting {path} to {value}{' for client ' + config.ENVS[server.value] if server else ''}.")
+    setting_path = path.split('.')
+    env = server.value if server else None
+
+    # Three modes, same order as the help text: read, set, edit a list.
+    if values and list_edits:
+        raise typer.BadParameter("Use either VALUE arguments or --add/--remove, not both.")
+    with _usage_errors():
+        if not values and not list_edits:
+            _print_setting(setting_path, env or config.settings.ENV)
+            return
+        if list_edits:
+            new_value = config.apply_list_edits(setting_path, add_entries, remove_entries, env=env)
+        else:
+            new_value = config.coerce_setting_value(setting_path, values, env=env)
+
+    config.update_setting(setting_path, new_value, env)
+    console.print(f"Updated setting {path} to {new_value!r}{' for client ' + config.ENVS[env] if env else ''}.")
+
+
+def _print_setting(setting_path: list[str], settings_env: str) -> None:
+    """The read half of read-modify-write: the effective value, JSON for non-strings."""
+    value = config.read_setting(setting_path, env=settings_env)
+    if value is config.MISSING:
+        console.print(
+            f"[yellow]{'.'.join(setting_path)} is not set for "
+            f"{config.ENVS[settings_env]}.[/yellow]"
+        )
+        raise typer.Exit(1)
+    typer.echo(value if isinstance(value, str) else json.dumps(value))
 
 
 def _switch_client(token: str) -> None:
@@ -554,11 +576,11 @@ def _switch_client(token: str) -> None:
 
 @app.command(
     "client",
-    help="Switch the game client: [green]LIVE[/green], [yellow]TEST[/yellow], or [cyan]EMU[/cyan] (RoF2).",
+    help=f"Switch the game client: {_client_choices()}.",
     rich_help_panel="🍔 Configuration"
 )
 def client_command(
-    env: Env = typer.Argument(..., metavar="CLIENT", case_sensitive=False, help="[green]LIVE[/green], [yellow]TEST[/yellow], or [cyan]EMU[/cyan]"),
+    env: Annotated[Env, typer.Argument(metavar="CLIENT", case_sensitive=False, help=_client_choices())],
 ):
     config.initialize_config()
     _switch_client(env.value)
@@ -566,16 +588,32 @@ def client_command(
 
 @app.command(
     "server",
-    help="Switch the active emu server: a name like [cyan]lazarus[/cyan], or [cyan]none[/cyan] to use any emu server.",
+    help="Switch the active emu server: a name like [cyan]lazarus[/cyan], [cyan]none[/cyan] to use any emu server, or [cyan]add[/cyan] to add a new server.",
     rich_help_panel="🍔 Configuration"
 )
 def server_command(
-    server: str = typer.Argument(..., metavar="SERVER", help="An emu server name (e.g. [cyan]lazarus[/cyan]), or [cyan]none[/cyan] to use any emu server"),
+    server: Annotated[str, typer.Argument(metavar="SERVER", help="An emu server name (e.g. [cyan]lazarus[/cyan]), [cyan]none[/cyan] to use any emu server, or [cyan]add[/cyan] to add a new server")],
+    slug: Annotated[str | None, typer.Argument(metavar="NAME", help="With [cyan]add[/cyan]: the new server's name (e.g. [cyan]myserver[/cyan])")] = None,
+    eqpath: Annotated[Path | None, typer.Option("--eqpath", exists=True, file_okay=False, resolve_path=True, help="With [cyan]add[/cyan]: the server's EverQuest folder.")] = None,
+    label: Annotated[str | None, typer.Option("--label", help="With [cyan]add[/cyan]: display name for a custom server.")] = None,
+    patcher_url: Annotated[str | None, typer.Option("--patcher-url", help="With [cyan]add[/cyan]: download link for the server's patcher (zip or exe); needs --patcher-exe.")] = None,
+    patcher_exe: Annotated[str | None, typer.Option("--patcher-exe", help="With [cyan]add[/cyan]: patcher file name, e.g. ThePatcher.exe (inside the zip, if any).")] = None,
+    guide: Annotated[str | None, typer.Option("--guide", help="With [cyan]add[/cyan]: URL of the server's getting-started guide.")] = None,
+    shortname: Annotated[str | None, typer.Option("--shortname", help="With [cyan]add[/cyan]: the server's short name as EverQuest knows it.")] = None,
 ):
     config.initialize_config()
 
     # Exit codes: 0 switched, 1 a guard blocked the switch, 2 bad input (typer usage error).
     value = server.strip()
+    add_details = {"eqpath": eqpath, "label": label, "patcher_url": patcher_url,
+                   "patcher_exe": patcher_exe, "guide": guide, "shortname": shortname}
+    if value.lower() == "add":
+        _server_add(slug, **add_details)
+        return
+    if slug is not None or any(add_details.values()):
+        raise typer.BadParameter(
+            "NAME and --eqpath/--label/--patcher-* only apply to 'redfetch server add'."
+        )
     token = value.upper()
     if token in config.ENVS:
         # a client token still switches the client, no nag.
@@ -600,37 +638,29 @@ def server_command(
         console.print(f"Server: {config.BARE_SERVER_LABEL}")
         return
 
-    try:
+    with _usage_errors():
         slug = servers.validate_server_slug(value.lower())
         server_env = servers.env_for_slug(slug)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
 
     if server_env is None:
         known = {s for e in config.MULTI_SERVER_ENVS for s in servers.list_servers(e)}
         valid = ", ".join([servers.BARE_SETUP_TOKEN, *sorted(known)])
         raise typer.BadParameter(
             f"Unknown server '{slug}'. Valid servers: {valid}. "
-            "To switch clients (LIVE, TEST, EMU), use 'redfetch client'."
+            f"To switch clients ({', '.join(config.ENVS)}), use 'redfetch client'."
         )
 
     if not servers.is_server_configured(slug, server_env):
         label = servers.server_label(slug, server_env)
         try:
-            # Strip once so the eqgame.exe check and add_server see the same folder path.
             folder = Prompt.ask(f"EverQuest folder for [bold]{escape(label)}[/bold]").strip()
         except (KeyboardInterrupt, EOFError):
             # headless/no-stdin: can't configure interactively
             console.print(f"[red]'{slug}' isn't set up; it needs an EverQuest folder.[/red]")
             raise typer.Exit(1)
-        if folder and not utils.validate_file_in_path(folder, "eqgame.exe"):
-            raise typer.BadParameter(
-                f"No eqgame.exe in {folder}, so it isn't an EverQuest folder."
-            )
-        try:
+        _require_eq_folder(folder)
+        with _usage_errors():
             servers.add_server(slug, env=server_env, eqpath=folder)
-        except ValueError as exc:
-            raise typer.BadParameter(str(exc)) from exc
         console.print(f"Server '{slug}' added.")
 
     # never persist a server slug as REDFETCH_ENV.
@@ -649,15 +679,35 @@ def server_command(
     console.print(f"Server: {escape(servers.server_label(slug, server_env))}")
 
 
+def _server_add(slug: str | None, *, eqpath: Path | None, label: str | None,
+                patcher_url: str | None, patcher_exe: str | None,
+                guide: str | None, shortname: str | None) -> None:
+    """`redfetch server add <name> --eqpath <folder>`: the paste-an-info-block flow.
+    add_server validates everything else (name, patcher pair, guide link)."""
+    if not slug or eqpath is None:
+        raise typer.BadParameter(
+            "Usage: redfetch server add <name> --eqpath <EverQuest folder>"
+        )
+    _require_eq_folder(str(eqpath))
+    slug = slug.strip().lower()
+    with _usage_errors():
+        # A known slug belongs to its bundled env; new customs go to the first (only) emu env.
+        server_env = servers.env_for_slug(slug) or config.MULTI_SERVER_ENVS[0]
+        servers.add_server(slug, env=server_env, eqpath=str(eqpath), label=label,
+                           patcher_url=patcher_url, patcher_exe=patcher_exe,
+                           guide=guide, shortname=shortname)
+    console.print(f"Server '{slug}' added. Switch to it with: redfetch server {slug}")
+
+
 @app.command(
     "provision",
     help="Create a server's EverQuest folder from a clean RoF2 copy, then set it up.",
     rich_help_panel="🍔 Configuration",
 )
 def provision_command(
-    server: str = typer.Argument(..., metavar="SERVER", help="An emu server name (e.g. [cyan]lazarus[/cyan])"),
-    source: str | None = typer.Option(None, "--source", help="A clean RoF2 zip, iso, or folder."),
-    destination: str | None = typer.Option(None, "--destination", help="Where to create the new EverQuest folder."),
+    server: Annotated[str, typer.Argument(metavar="SERVER", help="An emu server name (e.g. [cyan]lazarus[/cyan])")],
+    source: Annotated[str | None, typer.Option("--source", help="A clean RoF2 zip, iso, or folder.")] = None,
+    destination: Annotated[str | None, typer.Option("--destination", help="Where to create the new EverQuest folder.")] = None,
 ):
     config.initialize_config()
 
@@ -745,11 +795,9 @@ def _sigint_cancellation():
 
 def _resolve_known_emu_server(server: str) -> tuple[str, str]:
     """A bundled emu slug and its env; custom servers arrive with the Add dialog."""
-    try:
+    with _usage_errors():
         slug = servers.validate_server_slug(server.strip().lower())
         server_env = servers.env_for_slug(slug)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
     if server_env is None or not servers.is_known_server(slug, server_env):
         known = sorted(
             slug_
@@ -769,7 +817,7 @@ def _resolve_known_emu_server(server: str) -> tuple[str, str]:
     help="Show the configuration for the current or specified client.",
     rich_help_panel="🍔 Configuration"
 )
-def config_show_command(server: Env | None = typer.Option(None, "--server", "--client", "-s", case_sensitive=False, help="Client to show (defaults to current)")):
+def config_show_command(server: Annotated[Env | None, _client_option("Client to show (defaults to current)")] = None):
     from rich.panel import Panel
 
     config.initialize_config()
@@ -844,12 +892,12 @@ def config_show_command(server: Env | None = typer.Option(None, "--server", "--c
 )
 def publish_command(
     ctx: typer.Context,
-    resource_id: int = typer.Argument(..., metavar="RESOURCE_ID", help="Existing RedGuides resource ID"),
-    description: Path | None = typer.Option(None, "--description", "-d", metavar="README.md", help="Path to a description file (e.g. README.md) to become the overview description.", exists=True, file_okay=True, dir_okay=False, readable=True, resolve_path=True),
-    version: str | None = typer.Option(None, "--version", "-v", help="New version string (e.g., v1.0.1)"),
-    message: Path | None = typer.Option(None, "--message", "-m", metavar="CHANGELOG.md | MESSAGE", help="Path to [italic]CHANGELOG.md[/italic] (keep a changelog), other message file, or a direct message string.", exists=False),
-    file: Path | None = typer.Option(None, "--file", "-f", metavar="FILE.zip", help="Path to your zipped release file", exists=True, file_okay=True, dir_okay=False, readable=True, resolve_path=True),
-    domain: str | None = typer.Option(None, "--domain", help="If description or message is a .md file with relative URLs, resolve them to this domain (e.g., https://raw.githubusercontent.com/your/repo/main/)")
+    resource_id: Annotated[int, typer.Argument(metavar="RESOURCE_ID", help="Existing RedGuides resource ID")],
+    description: Annotated[Path | None, typer.Option("--description", "-d", metavar="README.md", help="Path to a description file (e.g. README.md) to become the overview description.", exists=True, file_okay=True, dir_okay=False, readable=True, resolve_path=True)] = None,
+    version: Annotated[str | None, typer.Option("--version", "-v", help="New version string (e.g., v1.0.1)")] = None,
+    message: Annotated[Path | None, typer.Option("--message", "-m", metavar="CHANGELOG.md | MESSAGE", help="Path to [italic]CHANGELOG.md[/italic] (keep a changelog), other message file, or a direct message string.", exists=False)] = None,
+    file: Annotated[Path | None, typer.Option("--file", "-f", metavar="FILE.zip", help="Path to your zipped release file", exists=True, file_okay=True, dir_okay=False, readable=True, resolve_path=True)] = None,
+    domain: Annotated[str | None, typer.Option("--domain", help="If description or message is a .md file with relative URLs, resolve them to this domain (e.g., https://raw.githubusercontent.com/your/repo/main/)")] = None,
 ):
     if ctx.info_name == "push":
         console.print("[yellow]Warning:[/yellow] 'push' is deprecated. Use 'redfetch publish' instead.")
@@ -861,6 +909,21 @@ def publish_command(
         file=file,
         domain=domain,
     )
+
+
+def load_agent_docs() -> str:
+    """Included notes for clankers."""
+    from importlib.resources import files
+    return files("redfetch").joinpath("agent_docs.md").read_text(encoding="utf-8")
+
+
+@app.command(
+    "agent",
+    help="Print setup and configuration slop for llm agents.",
+    rich_help_panel="🔧 System & Utilities"
+)
+def agent_command():
+    typer.echo(load_agent_docs())
 
 
 @app.command(
@@ -927,51 +990,47 @@ def legacy_switch_env_callback(ctx: typer.Context, value: Env | None):
 def root(
     ctx: typer.Context,
     # Legacy: --switch-env ENV
-    switch_env: Env | None = typer.Option(
-        None, "--switch-env", is_eager=True, case_sensitive=False, hidden=True,
+    switch_env: Annotated[Env | None, typer.Option(
+        "--switch-env", is_eager=True, case_sensitive=False, hidden=True,
         callback=legacy_switch_env_callback,
         metavar="CLIENT", help="(Deprecated) Use 'client' subcommand instead.",
-    ),
+    )] = None,
     # Legacy: --download-watched
-    download_watched: bool = typer.Option(
-        False, "--download-watched", is_eager=True, hidden=True,
-        callback=legacy_callback_factory(
-            "update", update_command, force=False, server=None, headless=False,
-        ),
+    download_watched: Annotated[bool, typer.Option(
+        "--download-watched", is_eager=True, hidden=True,
+        callback=legacy_callback_factory("update", update_command),
         help="(Deprecated) Use 'update' subcommand instead.",
-    ),
+    )] = False,
     # Legacy: --force-download
-    force_download: bool = typer.Option(
-        False, "--force-download", is_eager=True, hidden=True,
-        callback=legacy_callback_factory(
-            "update --force", update_command, force=True, server=None, headless=False,
-        ),
+    force_download: Annotated[bool, typer.Option(
+        "--force-download", is_eager=True, hidden=True,
+        callback=legacy_callback_factory("update --force", update_command, force=True),
         help="(Deprecated) Use 'update --force' instead.",
-    ),
+    )] = False,
     # Legacy: --serve
-    serve: bool = typer.Option(
-        False, "--serve", is_eager=True, hidden=True,
+    serve: Annotated[bool, typer.Option(
+        "--serve", is_eager=True, hidden=True,
         callback=legacy_callback_factory("web", web_command),
         help="(Deprecated) Use 'web' subcommand instead.",
-    ),
+    )] = False,
     # Legacy: --version
-    show_version: bool = typer.Option(
-        False, "--version", is_eager=True, hidden=True,
+    show_version: Annotated[bool, typer.Option(
+        "--version", is_eager=True, hidden=True,
         callback=legacy_callback_factory("version", version_command),
         help="(Deprecated) Use 'version' subcommand instead.",
-    ),
+    )] = False,
     # Legacy: --logout
-    do_logout: bool = typer.Option(
-        False, "--logout", is_eager=True, hidden=True,
+    do_logout: Annotated[bool, typer.Option(
+        "--logout", is_eager=True, hidden=True,
         callback=legacy_callback_factory("logout", auth_logout),
         help="(Deprecated) Use 'logout' subcommand instead.",
-    ),
+    )] = False,
     # Legacy: --uninstall
-    do_uninstall: bool = typer.Option(
-        False, "--uninstall", is_eager=True, hidden=True,
+    do_uninstall: Annotated[bool, typer.Option(
+        "--uninstall", is_eager=True, hidden=True,
         callback=legacy_callback_factory("uninstall", uninstall_command),
         help="(Deprecated) Use 'uninstall' subcommand instead.",
-    ),
+    )] = False,
 ):
     """redfetch - RedGuides resource management tool."""
     pass
@@ -981,8 +1040,21 @@ def root(
 # END LEGACY/DEPRECATED COMMANDS
 # ============================================================================
 
+
+# ===== Entry point =====
+
+def _reconfigure_console_streams() -> None:
+    """Piped output on Win crashes from help-panel emoji. Drop once Python 3.15 (UTF-8 default) is the floor."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding=None if stream.isatty() else "utf-8", errors="replace")
+        except (AttributeError, OSError, ValueError):
+            pass
+
+
 def main():
     try:
+        _reconfigure_console_streams()
         utils.ensure_cooked_console()
         # Launch TUI when no arguments are provided
         if len(sys.argv) == 1:
@@ -993,8 +1065,6 @@ def main():
             sys.argv[1] = "--help"
         app()
     except typer.Exit:
-        raise
-    except KeyboardInterrupt:
         raise
     except Exception as exc:
         exit_with_fatal_error(exc)

@@ -5,6 +5,7 @@ import tomllib
 
 from dynaconf import Dynaconf
 
+from conftest import _install_settings
 from redfetch import config
 
 
@@ -75,7 +76,7 @@ patcher_exe = "patcher.exe"
 
 
 def test_active_server_survives_prune(tmp_path, monkeypatch):
-    """ACTIVE_SERVER has no bundled default; the _MISSING rule must keep it."""
+    """ACTIVE_SERVER has no bundled default; the MISSING rule must keep it."""
     data = {"EMU": {"ACTIVE_SERVER": "thegrind"}}
     parsed = tomllib.loads(_render(tmp_path, data, monkeypatch))
     assert parsed["EMU"]["ACTIVE_SERVER"] == "thegrind"
@@ -129,3 +130,80 @@ def test_migrate_renames_navmesh_opt_in(tmp_path, monkeypatch):
 
     config._migrate_local_settings(str(tmp_path))  # second run: no-op
     assert local.read_text(encoding="utf-8") == first
+
+
+def test_migrate_retypes_bool_auto_run_vvmq(tmp_path, monkeypatch):
+    """Legacy bools become the "always"/"never" strings; reruns are no-ops."""
+    monkeypatch.setenv("REDFETCH_DATA_DIR", str(tmp_path))
+    local = tmp_path / "settings.local.toml"
+    local.write_text(
+        "[LIVE]\nAUTO_RUN_VVMQ = true\n[EMU]\nAUTO_RUN_VVMQ = false\n",
+        encoding="utf-8",
+    )
+
+    config._migrate_local_settings(str(tmp_path))
+    first = local.read_text(encoding="utf-8")
+    parsed = tomllib.loads(first)
+    assert parsed["LIVE"]["AUTO_RUN_VVMQ"] == "always"
+    assert parsed["EMU"]["AUTO_RUN_VVMQ"] == "never"
+
+    config._migrate_local_settings(str(tmp_path))  # second run: no-op
+    assert local.read_text(encoding="utf-8") == first
+
+
+# ---- key casing -------------------------------------------------------------
+# dynaconf reads keys case-insensitively (last spelling wins, and a later env
+# table replaces an earlier one wholesale), so save_config merges spellings
+# and pruning respells them the bundled way. Older files that forked heal on their next save.
+
+
+def test_merges_case_duplicate_leaves_last_wins(tmp_path, monkeypatch):
+    data = {"LIVE": {"eqpath": "C:/hand", "EQPATH": "C:/cli"}}
+    parsed = tomllib.loads(_render(tmp_path, data, monkeypatch))
+    assert parsed["LIVE"] == {"EQPATH": "C:/cli"}
+
+
+def test_merges_case_duplicate_env_tables(tmp_path, monkeypatch):
+    """A hand-written [live] beside redfetch's own [LIVE]: dynaconf would drop
+    everything under [live]; merged, both survive."""
+    data = {"live": {"EQPATH": "C:/hand"}, "LIVE": {"THEME": "dracula"}}
+    parsed = tomllib.loads(_render(tmp_path, data, monkeypatch))
+    assert parsed == {"LIVE": {"EQPATH": "C:/hand", "THEME": "dracula"}}
+
+
+def test_merges_nested_tables_into_bundled_spelling(tmp_path, monkeypatch):
+    data = {"LIVE": {
+        "special_resources": {"1974": {"Opt_In": False}},
+        "SPECIAL_RESOURCES": {"151": {"opt_in": True}},
+    }}
+    parsed = tomllib.loads(_render(tmp_path, data, monkeypatch))
+    assert parsed["LIVE"]["SPECIAL_RESOURCES"] == {
+        "1974": {"opt_in": False}, "151": {"opt_in": True}}
+
+
+def test_unknown_keys_keep_their_spelling(tmp_path, monkeypatch):
+    data = {"LIVE": {"SERVERS": {"MyServer": {"label": "x"}}}}
+    parsed = tomllib.loads(_render(tmp_path, data, monkeypatch))
+    assert parsed["LIVE"]["SERVERS"] == {"MyServer": {"label": "x"}}
+
+
+def test_path_like_compare_survives_odd_casing(tmp_path, monkeypatch):
+    """Download_Folder equal to the default apart from slashes prunes like
+    DOWNLOAD_FOLDER does: the path-aware compare keys on the bundled spelling."""
+    data = {"LIVE": {"Download_Folder": str(tmp_path / "Downloads")}}
+    assert "LIVE" not in tomllib.loads(_render(tmp_path, data, monkeypatch))
+
+
+def test_update_setting_replaces_other_spelling(tmp_path, monkeypatch):
+    _install_settings(tmp_path, monkeypatch, env="LIVE", current_env="LIVE",
+                      local_toml='[LIVE]\neqpath = "C:/hand"\n')
+    config.update_setting(["EQPATH"], "C:/cli", env="LIVE")
+    parsed = tomllib.loads((tmp_path / "settings.local.toml").read_text(encoding="utf-8"))
+    assert parsed["LIVE"] == {"EQPATH": "C:/cli"}
+
+
+def test_update_setting_unsets_other_spelling(tmp_path, monkeypatch):
+    _install_settings(tmp_path, monkeypatch, env="LIVE", current_env="LIVE",
+                      local_toml='[LIVE]\neqpath = "C:/hand"\n')
+    config.update_setting(["EQPATH"], None, env="LIVE")
+    assert "LIVE" not in tomllib.loads((tmp_path / "settings.local.toml").read_text(encoding="utf-8"))

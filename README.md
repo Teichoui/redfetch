@@ -68,13 +68,13 @@ To run redfetch from the command line:
 > ### 📦 Resource Management
 > - `update` - Update all *watched* and special resources.
 >   - `--force` / `-f` - Force re-download of all watched resources.
->   - `--client` / `--server` / `-s` - Update this client for this run only, without changing your active client (LIVE, TEST, EMU).
+>   - `--client` / `--server` / `-s` - Use this client for this run only, without changing your active client.
 > - `download <ID_OR_URL>` - Download a specific resource by ID or URL.
 >   - `ID_OR_URL` - RedGuides resource ID or URL
 >   - `--force` / `-f` - Force re-download by resetting this resource's download date.
->   - `--client` / `--server` / `-s` - Download for this client for this run only, without changing your active client (LIVE, TEST, EMU).
+>   - `--client` / `--server` / `-s` - Use this client for this run only, without changing your active client.
 > - `check` - Non-interactive update check (for automation.)
->   - `--client` / `--server` / `-s` - Check this client for this run only, without changing your active client (LIVE, TEST, EMU).
+>   - `--client` / `--server` / `-s` - Use this client for this run only, without changing your active client.
 > - `list` - List resources and dependencies in your local cache.
 > - `reset` - Reset download dates for *watched resources* in the database.
 >
@@ -82,24 +82,34 @@ To run redfetch from the command line:
 > - `ui` - Launch the *Terminal User Interface*.
 > - `run [SHORTCUT]` - Run a shortcut (e.g. **vvmq**, **eqbcs**, **myseq**). **run** by itself will show a full list.
 >   - `SHORTCUT` - Shortcut to run: vvmq, eqbcs, eq, eqgame, etc.
->   - `--client` / `--server` / `-s` - Run for this client this run only, without changing your active client (LIVE, TEST, EMU).
+>   - `--client` / `--server` / `-s` - Use this client for this run only, without changing your active client.
 > - `open [SHORTCUT]` - Open a folder or file (e.g. **downloads**, **mqini**). **open** by itself will show a full list.
 >   - `SHORTCUT` - Folder/file to open: downloads, vvmq, eq, etc.
->   - `--client` / `--server` / `-s` - Resolve paths for this client this run only, without changing your active client (LIVE, TEST, EMU).
+>   - `--client` / `--server` / `-s` - Use this client for this run only, without changing your active client.
 > - `web` - Launch the **RedGuides.com** web interface.
+> - `agent` - Print setup and configuration slop for llm agents.
 > - `version` - Show version and exit.
 > - `uninstall` - Uninstall **redfetch** and clean up data.
 > - `logout` - Log out and clear cached token and API cache.
 >
 > ### 🍔 Configuration
-> - `config <SETTING_PATH> <VALUE>` - Update a setting by path and value.
+> - `config <SETTING_PATH> [VALUES]` - Read or update a setting by path. Give no value to print the current one.
 >   - `SETTING_PATH` - Dot-separated setting path (e.g., SPECIAL_RESOURCES.1974.opt_in)
->   - `VALUE` - New value for the setting
->   - `--client` / `--server` / `-s` - Client to apply the change in (LIVE, TEST, EMU)
+>   - `VALUES` - New value. List settings take multiple values (e.g. a.ini b.ini). Omit to print the current value.
+>   - `--add <ENTRY>` - Append an entry to a list setting (e.g. a protected file).
+>   - `--remove <ENTRY>` - Remove an entry from a list setting.
+>   - `--client` / `--server` / `-s` - Client to apply the change in.
 > - `client <CLIENT>` - Switch the game client: LIVE, TEST, or EMU (RoF2).
->   - `CLIENT` - LIVE, TEST, or EMU
-> - `server <SERVER>` - Switch the active emu server: a name like lazarus, or none to use any emu server.
->   - `SERVER` - An emu server name (e.g. lazarus), or none to use any emu server
+>   - `CLIENT` - LIVE, TEST, or EMU (RoF2)
+> - `server <SERVER> [NAME]` - Switch the active emu server: a name like lazarus, none to use any emu server, or add to add a new server.
+>   - `SERVER` - An emu server name (e.g. lazarus), none to use any emu server, or add to add a new server
+>   - `NAME` - With add: the new server's name (e.g. myserver)
+>   - `--eqpath` - With add: the server's EverQuest folder.
+>   - `--label` - With add: display name for a custom server.
+>   - `--patcher-url` - With add: download link for the server's patcher (zip or exe); needs --patcher-exe.
+>   - `--patcher-exe` - With add: patcher file name, e.g. ThePatcher.exe (inside the zip, if any).
+>   - `--guide` - With add: URL of the server's getting-started guide.
+>   - `--shortname` - With add: the server's short name as EverQuest knows it.
 > - `provision <SERVER>` - Create a server's EverQuest folder from a clean RoF2 copy, then set it up.
 >   - `SERVER` - An emu server name (e.g. lazarus)
 >   - `--source` - A clean RoF2 zip, iso, or folder.
@@ -142,7 +152,7 @@ DOWNLOAD_FOLDER = 'D:\dl'  # where resources land unless they have a path of the
 EQPATH = 'C:\EverQuest'    # the live client's EverQuest folder
 THEME = "dracula"          # interface theme, ctrl+t to cycle
 AUTO_UPDATE = true         # silent update when MacroQuest launches
-AUTO_RUN_VVMQ = true       # start MQ after updates; false = never, unset = ask
+AUTO_RUN_VVMQ = "always"   # start MQ after updates; "never", or "ask" (default)
 NAVMESH_DOWNLOADS = true   # pre-made meshes for the Nav plugin
 
 [EMU]

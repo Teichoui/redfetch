@@ -1,4 +1,5 @@
 # standard
+import datetime
 import json
 import os
 import platform
@@ -10,6 +11,7 @@ from pathlib import Path
 
 # third-party
 import tomlkit
+from tomlkit.exceptions import TOMLKitError
 from dynaconf import Dynaconf, Validator, ValidationError
 from dynaconf.loaders import env_loader
 from platformdirs import user_config_dir, user_data_dir
@@ -23,8 +25,10 @@ CATEGORY_MAP = {
 }
 
 # MQ Client environments (dynaconf envs)
-# Keys are reserved against server slugs.
-ENVS = {"LIVE": "Live", "TEST": "Test", "EMU": "Emu (RoF2)"}
+# Tokens are persisted (REDFETCH_ENV, DB names, [EMU] settings sections) and never change;
+# they're also reserved against server slugs. Labels name the game build.
+ENVS = {"LIVE": "Live", "TEST": "Test", "EMU": "RoF2"}
+DEFAULT_ENV = next(iter(ENVS))  # first client is the default
 
 # Envs who have switchable servers (servers.py manages)
 MULTI_SERVER_ENVS = ("EMU",)
@@ -161,9 +165,9 @@ def initialize_config():
 
     # Check if the .env file exists
     if not os.path.exists(env_file_path):
-        # If not, create it and set the default environment to 'LIVE'
-        atomic_write_text(env_file_path, 'REDFETCH_ENV=LIVE\n')
-        print(f".env file created at {env_file_path} (client: Live)")
+        # If not, create it and set the default client
+        atomic_write_text(env_file_path, f'REDFETCH_ENV={DEFAULT_ENV}\n')
+        print(f".env file created at {env_file_path} (client: {ENVS[DEFAULT_ENV]})")
 
     # Migrate any settings.local.toml written by older versions
     _migrate_local_settings(config_dir)
@@ -384,7 +388,7 @@ SETTINGS_LOCAL_HEADER = (
 # Path-valued keys, compared with path-aware equality (slash vs backslash).
 _PATH_LIKE_KEYS = {"EQPATH", "DOWNLOAD_FOLDER", "custom_path", "default_path"}
 
-_MISSING = object()
+MISSING = object()
 _base_settings_cache = None
 
 
@@ -412,17 +416,17 @@ def _to_plain(data):
     return data
 
 
-def _base_lookup(base, key):
-    """Fetch key from base defaults, tolerating Dynaconf case folding."""
-    if not isinstance(base, dict):
-        return _MISSING
-    if key in base:
-        return base[key]
-    lowered = key.lower()
-    for bkey, bval in base.items():
-        if isinstance(bkey, str) and bkey.lower() == lowered:
-            return bval
-    return _MISSING
+def _merge_case_variants(table, into=None):
+    """merge together keys that only differ by cAsE."""
+    into = {} if into is None else into
+    for key, value in table.items():
+        name = next((k for k in into if k.lower() == key.lower()), key)
+        if isinstance(value, dict):
+            nested = into.get(name)
+            into[name] = _merge_case_variants(value, nested if isinstance(nested, dict) else {})
+        else:
+            into[name] = value
+    return into
 
 
 def _equals_default(value, default, key):
@@ -439,43 +443,41 @@ def _equals_default(value, default, key):
 
 
 def _prune_branch(local, base):
-    """Recursively drop leaves equal to their default and tables left empty."""
-    for key in list(local.keys()):
-        value = local[key]
-        base_value = _base_lookup(base, key)
+    """Drops any setting that matches the bundled default setting."""
+    spelling = {k.lower(): k for k in base}
+    for key, value in list(local.items()):
+        del local[key]
+        key = spelling.get(key.lower(), key)
+        base_value = base.get(key, MISSING)
         if isinstance(value, dict):
             _prune_branch(value, base_value if isinstance(base_value, dict) else {})
             if not value:
-                del local[key]
-        elif base_value is not _MISSING and _equals_default(value, base_value, key):
-            del local[key]
+                continue
+        elif base_value is not MISSING and _equals_default(value, base_value, key):
+            continue
+        elif isinstance(value, list) and isinstance(base_value, list):
+            bundled = {i.lower() for i in base_value}
+            value = [i for i in value if i.lower() not in bundled]  # dynaconf merges the bundle back in on read
+            if not value:
+                continue
+        local[key] = value
 
 
 def _prune_to_deltas(data):
-    """Drop entries equal to the defaults, leaving only deltas.
-
-    Each top-level table is an environment (LIVE/TEST/EMU/DEFAULT), compared
-    against the same environment's defaults from the bundled settings.toml.
-    """
+    """Builds a list of client defaults, hands it to _prune_branch."""
     base = _base_settings()
-    for env in list(data.keys()):
-        if not isinstance(data[env], dict):
-            continue
+    base_tree = {}
+    for env in data:
         try:
-            base_env = base.from_env(env).as_dict()
+            base_tree[env.upper()] = base.from_env(env).as_dict()
         except Exception:
-            continue  # defaults unresolvable; keep env verbatim
-        _prune_branch(data[env], base_env)
-        if not data[env]:
-            del data[env]
+            pass  # defaults unresolvable; keep env verbatim
+    _prune_branch(data, base_tree)
 
 
 def save_config(file_path, config_data):
-    """Regenerate settings.local.toml, keeping only deltas from the defaults.
-
-    Accepts a tomlkit document or a plain dict.
-    """
-    data = _to_plain(config_data)
+    """Writes settings.local.toml."""
+    data = _merge_case_variants(_to_plain(config_data))
     _prune_to_deltas(data)
 
     body = _annotate_special_resource_comments(tomlkit.dumps(data)).strip("\n")
@@ -488,7 +490,7 @@ def save_config(file_path, config_data):
 
 
 def _migrate_local_settings(config_dir):
-    """Carry renamed settings in an older settings.local.toml"""
+    """Carry changed settings in an older settings.local.toml"""
     config_file = os.path.join(config_dir, 'settings.local.toml')
     if not os.path.exists(config_file):
         return
@@ -497,11 +499,17 @@ def _migrate_local_settings(config_dir):
             data = tomllib.load(f)
     except Exception:
         return
-    # NAVMESH_OPT_IN became NAVMESH_DOWNLOADS
     changed = False
     for env_table in data.values():
-        if isinstance(env_table, dict) and "NAVMESH_OPT_IN" in env_table:
+        if not isinstance(env_table, dict):
+            continue
+        # NAVMESH_OPT_IN became NAVMESH_DOWNLOADS
+        if "NAVMESH_OPT_IN" in env_table:
             env_table.setdefault("NAVMESH_DOWNLOADS", env_table.pop("NAVMESH_OPT_IN"))
+            changed = True
+        # bool AUTO_RUN_VVMQ became tri-state "ask"/"always"/"never"
+        if isinstance(env_table.get("AUTO_RUN_VVMQ"), bool):
+            env_table["AUTO_RUN_VVMQ"] = "always" if env_table["AUTO_RUN_VVMQ"] else "never"
             changed = True
     if changed:
         save_config(config_file, data)
@@ -524,6 +532,88 @@ def reload_settings():
     settings.__core__.config.env_cache.clear()
 
 
+def normalize_tristate(value) -> str:
+    """Interpreter for "ask"/"always"/"never"."""
+    token = str(value).strip().lower()
+    return token if token in ("always", "never") else "ask"
+
+
+# CLI value typing (`redfetch config`).
+# Why a bridge? Dynaconf reads, tomlkit writes, case issues because neither knows the other.
+
+def read_setting(setting_path, env=None):
+    """Effective value (after overrides) for the chosen client, with handling."""
+    env = env or settings.ENV
+    path_label = ".".join(setting_path)
+    try:
+        value = settings.from_env(env).get(path_label, MISSING)
+    except (AttributeError, ValueError) as exc:
+        # better to state a common config issue than raise an error
+        raise ValueError(f"'{path_label}' isn't a valid setting path: {exc}") from exc
+    return value if value is MISSING else _to_plain(value)
+
+
+def _parse_toml_value(raw):
+    """Type a CLI string for tomlkit, unknown is a string"""
+    token = raw.strip().lower()
+    if token in ("true", "false"):  # accept True/FALSE too; TOML itself is lowercase-only
+        return token == "true"
+    try:
+        value = tomlkit.parse(f"v = {raw}")["v"].unwrap()
+    except TOMLKitError:
+        return raw
+    # we don't have anything that needs a date at the moment
+    if isinstance(value, (datetime.date, datetime.time)):
+        return raw
+    return value
+
+
+def coerce_setting_value(setting_path, raw_values, env=None):
+    """Coerce aka convert the CLI's string arguments into the correct type."""
+    env = env or settings.ENV
+    path_label = ".".join(setting_path)
+    current = read_setting(setting_path, env=env)
+    if current is MISSING and setting_path[0].upper() == "PROTECTED_FILES_BY_RESOURCE":
+        current = []  # new ids are still filename lists
+    if isinstance(current, dict):
+        raise ValueError(f"'{path_label}' is a settings table, not a single setting.")
+    if len(raw_values) != 1:
+        if current is not MISSING and not isinstance(current, list):
+            raise ValueError(f"'{path_label}' takes a single value, got {len(raw_values)}.")
+        return list(raw_values)
+    raw = raw_values[0]
+    value = _parse_toml_value(raw)
+    if isinstance(value, dict):
+        raise ValueError(f"'{path_label}' can't be set to a table.")
+    if isinstance(current, bool) and not isinstance(value, bool):
+        raise ValueError(f"'{path_label}' expects true or false, got '{raw}'.")
+    if isinstance(current, str) and not isinstance(value, (str, list)):
+        return raw  # str settings stay str; only the array spelling may retype them
+    if isinstance(current, list) and not isinstance(value, list):
+        return [raw]  # a bare entry keeps list settings lists, matching --add
+    return value
+
+
+def apply_list_edits(setting_path, additions, removals, env=None):
+    """cli --add/--remove on a list setting."""
+    env = env or settings.ENV
+    current = read_setting(setting_path, env=env)
+    if current is not MISSING and not isinstance(current, list):
+        raise ValueError(
+            f"--add/--remove only work on list settings; "
+            f"'{'.'.join(setting_path)}' isn't one."
+        )
+    items = {str(i).lower(): str(i) for i in current} if isinstance(current, list) else {}
+    for entry in additions:
+        items.setdefault(entry.lower(), entry)
+    drop = {entry.lower() for entry in removals}
+    bundled = {i.lower() for i in _base_settings().from_env(env).get(".".join(setting_path), [])}
+    for entry in removals:
+        if entry.lower() in bundled:
+            raise ValueError(f"'{entry}' is a shipped default and can't be removed from '{'.'.join(setting_path)}'.")
+    return [item for key, item in items.items() if key not in drop]
+
+
 def update_setting(setting_path, setting_value, env=None):
     """Update a specific setting in the settings.local.toml file and in memory,
     optionally within a specific environment."""
@@ -535,7 +625,7 @@ def update_setting(setting_path, setting_value, env=None):
     config_data = load_config(config_file)
 
     # Use the specified environment or, if None, the current environment
-    env = env or settings.current_env
+    env = env or settings.ENV
 
     # Ensure the environment exists in the configuration
     if env not in config_data:
@@ -543,21 +633,18 @@ def update_setting(setting_path, setting_value, env=None):
 
     # Navigate to the correct setting based on the path within the specified environment
     current_data = _descend_tables(config_data[env], setting_path[:-1])
+    # dynaconf reads keys case-insensitively; use the file's spelling so an unset finds it
+    leaf = next((k for k in current_data if k.lower() == setting_path[-1].lower()), setting_path[-1])
 
     # Debugging output
-    config_key = '.'.join(setting_path)
-    print(f"Updating config key: {config_key}")
-    print(f"Old Value: {current_data.get(setting_path[-1], 'Not set')}")
-
-    # Convert 'true'/'false' strings to Boolean values
-    if isinstance(setting_value, str) and setting_value.lower() in ('true', 'false'):
-        setting_value = setting_value.lower() == 'true'
+    print(f"Updating config key: {'.'.join(setting_path)}")
+    print(f"Old Value: {current_data.get(leaf, 'Not set')}")
 
     # None means "unset", TOML can't store None, so remove the key
     if setting_value is None:
-        current_data.pop(setting_path[-1], None)
+        current_data.pop(leaf, None)
     else:
-        current_data[setting_path[-1]] = setting_value
+        current_data[leaf] = setting_value
 
     print(f"New Value: {setting_value}")
 

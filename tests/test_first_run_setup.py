@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from redfetch.config_firstrun import create_first_run_flag, first_run_setup, is_configured
 
 @pytest.fixture

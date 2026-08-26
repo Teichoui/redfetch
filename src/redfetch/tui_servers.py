@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 
 # third-party
-import httpx
 from textual_fspicker import FileOpen, SelectDirectory
 from rich.console import detect_legacy_windows
 from rich.markup import escape
@@ -23,6 +22,7 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 
 # local
+from redfetch import detecteq
 from redfetch import config
 from redfetch import laa
 from redfetch import patcher
@@ -255,9 +255,9 @@ class ServersTab(ScrollableContainer):
     def _refresh_patcher_button(self, context: servers.ServerContext) -> None:
         """Enable the patcher button only when the active server has a patcher and it isn't already installed or downloading."""
         button = self.query_one("#server_patcher", Button)
-        if patcher.has_patcher(context):
-            # Content(), not escape()
-            label = context.label
+        # Content(), not escape()
+        label = context.label
+        if patcher.has_download(context):
             downloading = self.app.patcher_install_running
             enabling = self.app.laa_enable_running
             installed = patcher.is_installed(context)
@@ -275,6 +275,12 @@ class ServersTab(ScrollableContainer):
         if context.patcher_url:
             # Reachable only by hand-editing: a link with no file name to install or run.
             button.tooltip = "This server's patcher entry needs a patcher_exe file name in settings.local.toml."
+        elif context.patcher_exe:
+            # A patcher the user already has (from the client, or a friend): nothing to fetch.
+            button.tooltip = Content(
+                f"No download link for the {label} patcher: put {context.patcher_exe} "
+                "in its EverQuest folder yourself."
+            )
         else:
             button.tooltip = "This server has no patcher, according to my settings.local.toml"
 
@@ -585,7 +591,7 @@ class AddServerScreen(ModalScreen[dict | None]):
                 with Horizontal(id="add_folder_row"):
                     yield Input(placeholder="EverQuest folder for this server", id="add_folder")
                     yield Button("Browse", id="add_browse", variant="default")
-                yield Input(placeholder="Patcher download link (optional)", id="add_patcher_url")
+                yield Input(placeholder="Patcher download link (optional, needs the file name)", id="add_patcher_url")
                 yield Input(placeholder="Patcher file name (optional, e.g. ThePatcher.exe)", id="add_patcher_exe")
             # markup=False: these errors quote what the user typed, brackets and all.
             yield Label("", id="server_dialog_error", markup=False)
@@ -727,32 +733,13 @@ class AddServerScreen(ModalScreen[dict | None]):
             label = self.query_one("#add_label", Input).value.strip() or None
             try:
                 servers.validate_server_slug(slug, must_be_new=True)
+                # The patcher gates are shared with `redfetch server add`.
+                patcher_url, patcher_exe = servers.validate_patcher_pair(
+                    self.query_one("#add_patcher_url", Input).value,
+                    self.query_one("#add_patcher_exe", Input).value,
+                )
             except ValueError as exc:
                 error.update(str(exc))
-                return
-            patcher_url = self.query_one("#add_patcher_url", Input).value.strip()
-            if patcher_url:
-                try:
-                    parsed = httpx.URL(patcher_url)
-                except httpx.InvalidURL:
-                    parsed = None
-                if parsed is None or parsed.scheme not in ("https", "http") or not parsed.host:
-                    error.update("The patcher link must be a full web link, like https://...")
-                    return
-            patcher_exe = self.query_one("#add_patcher_exe", Input).value.strip()
-            if patcher_exe:
-                try:
-                    patcher_exe = patcher.validate_patcher_exe(patcher_exe)
-                except patcher.PatcherError as exc:
-                    error.update(str(exc))
-                    return
-            if bool(patcher_url) != bool(patcher_exe):
-                # Only useful whole: the link fetches it, the name installs and runs it.
-                error.update(
-                    "Add the patcher's file name too, like ThePatcher.exe."
-                    if patcher_url
-                    else "Add the patcher's download link too."
-                )
                 return
         else:
             slug = str(self.query_one("#add_known", Select).value)
@@ -781,7 +768,7 @@ class AddServerScreen(ModalScreen[dict | None]):
         if not folder:
             error.update("Choose the EverQuest folder for this server.")
             return
-        if not utils.validate_file_in_path(folder, "eqgame.exe"):
+        if not detecteq.is_valid_eq_dir(folder):
             error.update("No eqgame.exe in that folder, so it isn't an EverQuest folder.")
             return
         self.dismiss(

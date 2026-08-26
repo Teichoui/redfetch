@@ -17,7 +17,7 @@ from rich.box import ASCII2
 from tomlkit import TOMLDocument
 
 # Custom
-from redfetch import utils
+from redfetch import detecteq
 from redfetch.config import ENVS, _descend_tables, load_config, save_config
 from redfetch.detecteq import find_everquest_uninstall_location
 
@@ -124,7 +124,7 @@ def setup_directories():
                 return setup_directories()
 
         # At this point, the directory should exist (either pre-existing or newly created).
-        if utils.validate_file_in_path(custom_dir, 'eqgame.exe'):
+        if detecteq.is_valid_eq_dir(custom_dir):
             console.print(
                 Panel(
                     Text.from_markup(
@@ -380,7 +380,7 @@ def first_run_setup():
                         else:
                             console.print(f"[yellow]No changes made to EQ path in {settings_file}[/yellow]")
             else:
-                console.print(f"\n[bold cyan][italic]\"Behold, an elder realm forged before Napster's rise[/italic]\":[/bold cyan]")
+                console.print("\n[bold cyan][italic]\"Behold, an elder realm forged before Napster's rise[/italic]\":[/bold cyan]")
                 console.print(f"\n[yellow]EverQuest detected at:[/yellow]\n[cyan]{eq_path}[/cyan]")
                 if CustomConfirm.ask("Use this as your 'Live' EverQuest path?"):
                     eq_path_updated = update_setting(

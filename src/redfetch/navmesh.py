@@ -4,7 +4,6 @@ NavMesh sync module - downloads Nav mesh files from mqmesh.com
 # standard
 import os
 import hashlib
-import json
 import asyncio
 from dataclasses import dataclass
 from typing import NamedTuple
@@ -50,7 +49,7 @@ def get_navmesh_directory() -> str | None:
 def is_navmesh_enabled() -> bool:
     """Navmesh downloads are opt-out."""
     try:
-        return bool(config.active_settings().get("NAVMESH_DOWNLOADS", True))
+        return bool(config.active_settings().get("NAVMESH_DOWNLOADS"))
     except Exception:
         # unreadable config: fail closed rather than download into an unknown env
         return False

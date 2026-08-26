@@ -101,7 +101,7 @@ def get_vvmq_path() -> str | None:
 def is_auto_update_enabled() -> bool:
     """Whether silent runs may install updates."""
     try:
-        return bool(config.active_settings().get("AUTO_UPDATE", True))
+        return bool(config.active_settings().get("AUTO_UPDATE"))
     except Exception:
         return False
 

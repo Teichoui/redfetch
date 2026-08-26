@@ -12,11 +12,11 @@ from redfetch import config
 from redfetch import servers
 
 
-# Tri-state toggle: No / Ask / Yes maps to config values False / None / True.
-TRISTATE_OPTIONS: list[tuple[str, bool | None]] = [
-    ("No", False),
-    ("Ask", None),
-    ("Yes", True),
+# Tri-state toggle: No / Ask / Yes maps to config values "never" / "ask" / "always".
+TRISTATE_OPTIONS: list[tuple[str, str]] = [
+    ("No", "never"),
+    ("Ask", "ask"),
+    ("Yes", "always"),
 ]
 
 
@@ -30,11 +30,8 @@ def clean_source_filters() -> Filters:
 
 def tristate_index(value) -> int:
     """Return the radio index for a stored config value (defaults to Ask)."""
-    if value is True:
-        return 2
-    if value is False:
-        return 0
-    return 1  # None / unset -> Ask
+    mode = config.normalize_tristate(value)
+    return next(i for i, (_label, v) in enumerate(TRISTATE_OPTIONS) if v == mode)
 
 
 def tristate_label(value) -> str:
@@ -91,7 +88,7 @@ def build_client_rows() -> list[tuple[str, str]]:
 
 
 def make_client_select(value: str, widget_id: str) -> Select[str]:
-    """The client dropdown: Live / Test / Emu (RoF2). Its options never change."""
+    """The client dropdown: Live / Test / RoF2. Its options never change."""
     return Select[str](
         build_client_rows(),
         id=widget_id,

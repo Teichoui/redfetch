@@ -18,6 +18,9 @@ GENERIC_SNAPSHOT_KEY = "GENERIC"
 # reserved so a user server can never shadow the generic "any emu server"
 BARE_SETUP_TOKEN = "none"
 
+# CLI words ("none", "add") no server may be named after.
+RESERVED_SERVER_TOKENS = (BARE_SETUP_TOKEN, "add")
+
 SERVER_SLOT_PATHS = (
     ("EQPATH",),
     *(
@@ -65,7 +68,7 @@ def validate_server_slug(slug: str, *, must_be_new: bool = False) -> str:
         raise ValueError(
             f"Invalid server name '{slug}': use lowercase letters, digits, '-' or '_'."
         )
-    if slug.upper() in config.ENVS or slug == BARE_SETUP_TOKEN:
+    if slug.upper() in config.ENVS or slug in RESERVED_SERVER_TOKENS:
         raise ValueError(f"'{slug}' is a reserved name.")
     if must_be_new:
         for env in config.ENVS:
@@ -74,6 +77,34 @@ def validate_server_slug(slug: str, *, must_be_new: bool = False) -> str:
                     f"Server name '{slug}' is already in use on {config.ENVS[env]}."
                 )
     return slug
+
+
+def require_web_url(value: str, what: str) -> None:
+    """Raise unless `value` is a full http(s) link with a host."""
+    import httpx
+    try:
+        parsed = httpx.URL(value)
+    except httpx.InvalidURL:
+        parsed = None
+    if parsed is None or parsed.scheme not in ("https", "http") or not parsed.host:
+        raise ValueError(f"The {what} must be a full web link, like https://...")
+
+
+def validate_patcher_pair(patcher_url: str | None, patcher_exe: str | None) -> tuple[str, str]:
+    """Validate a patcher entry: the exe name alone, or a link plus the name to save it as."""
+    patcher_url = (patcher_url or "").strip()
+    patcher_exe = (patcher_exe or "").strip()
+    if patcher_url:
+        require_web_url(patcher_url, "patcher link")
+    if patcher_exe:
+        from redfetch import patcher  # deferred: patcher imports from this module
+        try:
+            patcher_exe = patcher.validate_patcher_exe(patcher_exe)
+        except patcher.PatcherError as exc:
+            raise ValueError(str(exc)) from exc
+    if patcher_url and not patcher_exe:
+        raise ValueError("Add the patcher's file name too, like ThePatcher.exe.")
+    return patcher_url, patcher_exe
 
 
 def list_servers(env: str) -> dict[str, dict]:
@@ -350,7 +381,8 @@ def generic_eqpath(env: str) -> str:
 
 
 def add_server(slug: str, *, env: str, eqpath: str, label: str | None = None,
-               patcher_url: str | None = None, patcher_exe: str | None = None) -> None:
+               patcher_url: str | None = None, patcher_exe: str | None = None,
+               guide: str | None = None, shortname: str | None = None) -> None:
     """Configure a known server or create a custom one."""
     _require_init()
 
@@ -360,6 +392,11 @@ def add_server(slug: str, *, env: str, eqpath: str, label: str | None = None,
     eqpath = str(eqpath or "").strip()
     if not eqpath:
         raise ValueError(f"Server '{slug}' needs an EverQuest folder.")
+    # Every add path (CLI, TUI, provision) lands here, so the patcher and guide gates live here.
+    patcher_url, patcher_exe = validate_patcher_pair(patcher_url, patcher_exe)
+    guide = (guide or "").strip()
+    if guide:
+        require_web_url(guide, "guide")
 
     known = slug in _bundle_servers(env)
     if not known and slug not in list_servers(env):
@@ -367,8 +404,13 @@ def add_server(slug: str, *, env: str, eqpath: str, label: str | None = None,
 
     path, doc = _load_local()
     snap = config._descend_tables(doc, (env, "SERVERS", slug))
-    if label and not known:  # the bundle owns known labels
-        snap["label"] = label
+    if not known:  # the bundle owns known identity metadata
+        if label:
+            snap["label"] = label
+        if guide:
+            snap["guide"] = guide
+        if shortname:
+            snap["shortname"] = shortname
     snap["opt_in"] = True
     snap["eqpath"] = eqpath
     if patcher_url:

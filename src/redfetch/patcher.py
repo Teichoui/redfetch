@@ -30,7 +30,12 @@ class PatcherError(Exception):
 
 
 def has_patcher(ctx: ServerContext) -> bool:
-    """True when this server ships a patcher — what every UI surface hides behind."""
+    """True when this server has a patcher to run."""
+    return bool(ctx.patcher_exe)
+
+
+def has_download(ctx: ServerContext) -> bool:
+    """True when redfetch can fetch the patcher: a link plus the name to save it as."""
     return bool(ctx.patcher_url and ctx.patcher_exe)
 
 
@@ -77,7 +82,7 @@ async def install(ctx: ServerContext) -> Path:
 
     Every failure raises PatcherError carrying a message meant for the user.
     """
-    if not has_patcher(ctx):
+    if not has_download(ctx):
         raise PatcherError(f"{ctx.label} doesn't have a patcher to download.")
     target = patcher_path(ctx)
     if target.is_file():

@@ -1,7 +1,6 @@
 """`update --headless` (the MQ-spawned form): check-style init, no prompts, no
 browser, no dialogs; binary exit contract with all nuance in update_status.json."""
 
-import asyncio
 import json
 from types import SimpleNamespace
 
@@ -71,7 +70,7 @@ def headless_env(monkeypatch, tmp_path):
     settings.setenv = lambda new_env: setattr(settings, "ENV", new_env)
     settings.validators = SimpleNamespace(validate=lambda: None)
     # Dict-backed so tests can persist per-env values and exercise the real accessors.
-    env_values: dict = {}
+    env_values: dict = {"AUTO_UPDATE": True}  # mirrors the settings.toml [DEFAULT]
     settings.from_env = lambda _env: SimpleNamespace(
         get=lambda key, default=None: env_values.get(key, default)
     )
@@ -81,7 +80,7 @@ def headless_env(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "initialize_config", lambda: settings)
     monkeypatch.setattr("redfetch.config_firstrun.is_configured", lambda *a, **k: True)
     monkeypatch.setattr(main.auth, "initialize_keyring", lambda: None)
-    monkeypatch.setattr(main, "_has_auth_credentials", lambda: True)
+    monkeypatch.setattr(main.auth, "has_stored_credentials", lambda: True)
     monkeypatch.setattr(main.utils, "get_vvmq_path", lambda: r"D:\MQ\VanillaMQ_LIVE")
     monkeypatch.setattr(main.utils, "sweep_stale_update_debris", lambda: None)
     monkeypatch.setattr(main.store, "initialize_db", lambda db_name: None)
@@ -146,7 +145,7 @@ def test_not_configured_writes_verdict_never_wizard(monkeypatch, tmp_path):
 
 
 def test_no_credentials_writes_needs_login_no_browser(headless_env):
-    headless_env.monkeypatch.setattr(main, "_has_auth_credentials", lambda: False)
+    headless_env.monkeypatch.setattr(main.auth, "has_stored_credentials", lambda: False)
     headless_env.monkeypatch.setattr(
         main.auth, "authorize",
         lambda: pytest.fail("headless must never reach authorize() (browser)"),

@@ -9,6 +9,15 @@
 DOWNLOAD_FOLDER = "@format {env[REDFETCH_DATA_DIR]}/Downloads"
 EQPATH = ""
 
+# Update silently when MacroQuest launches.
+AUTO_UPDATE = true
+
+# Download navmesh files alongside Very Vanilla MQ.
+NAVMESH_DOWNLOADS = true
+
+# Start MQ after update "ask"/"always"/"never"
+AUTO_RUN_VVMQ = "ask"
+
 # ========================================
 # XenForo OAuth2
 # ========================================

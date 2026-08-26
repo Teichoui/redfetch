@@ -14,6 +14,8 @@ import pytest
 from redfetch import config
 from redfetch import tui_servers
 
+from conftest import FakeInput, _eq_folder
+
 # tui's Redfetch class evaluates config.settings.ENV at import time (a
 # reactive default); stand in for it if config isn't initialized, then restore.
 _prior_settings = config.settings
@@ -23,8 +25,6 @@ try:
     from redfetch import tui
 finally:
     config.settings = _prior_settings
-
-from conftest import FakeInput, _eq_folder
 
 AddServerScreen = tui_servers.AddServerScreen
 
