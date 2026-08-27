@@ -80,12 +80,8 @@ def fetch_latest_version_from_pypi():
 
 
 def detect_installation_method():
-    """Detect how the package was installed."""
+    """Detect how the package was installed: 'pipx', 'uv', or 'pip' (callers handle PyApp first)."""
     try:
-        # Check for PYAPP first
-        if os.getenv('PYAPP'):
-            return 'pyapp'
-
         # Get the package location
         package_location = Path(__file__).parent.absolute()
 
@@ -153,10 +149,10 @@ def check_for_update():
             )
             console.print(version_info)
             
-            # Handle PYAPP separately
-            if os.getenv('PYAPP'):
+            pyapp_exe = config.own_pyapp_exe()
+            if pyapp_exe:
                 if Confirm.ask("Would you like to update now?"):
-                    return self_update()
+                    return self_update(pyapp_exe)
                 else:
                     console.print("[yellow]Update skipped. You can manually update later.[/yellow]")
                 return False
@@ -223,7 +219,7 @@ def spawn_silent_self_update() -> bool:
         if version.parse(latest_version) <= version.parse(get_current_version()):
             return False
 
-        pyapp_exe = os.getenv('PYAPP')
+        pyapp_exe = config.own_pyapp_exe()
         if pyapp_exe:
             update_command = [pyapp_exe, 'self', 'update']
         else:
@@ -245,8 +241,8 @@ def spawn_silent_self_update() -> bool:
         return False
 
 
-def self_update() -> NoReturn:
-    """Update with PYAPP."""
+def self_update(executable_path: str) -> NoReturn:
+    """Run `redfetch.exe self update` in a new console and exit so PyApp can swap the install."""
     try:
         console.print("[bold]Performing self-update...[/bold]")
 
@@ -255,7 +251,6 @@ def self_update() -> NoReturn:
         console.print(f"Current version: {current_version}")
         console.print(f"Latest version: {latest_version}")
 
-        executable_path = os.getenv('PYAPP')
         update_command = [executable_path, 'self', 'update']
 
         # Start the update process in a new console and exit the current one
@@ -272,15 +267,10 @@ def self_update() -> NoReturn:
         sys.exit(1)
 
 
-def self_remove() -> None:
-    """Remove with PYAPP."""
+def self_remove(executable_path: str) -> None:
+    """Write uninstall.bat beside redfetch.exe, launch it, and exit so it can run `self remove`."""
     try:
         console.print("[bold]Performing self-uninstall...[/bold]")
-
-        executable_path = os.getenv('PYAPP')
-        if not executable_path:
-            console.print("[bold red]Executable path not found. Exiting self-remove.[/bold red]")
-            return
 
         batch_file_path = Path(executable_path).with_name("uninstall.bat")
         # Match the UTF-8 code page selected by the script.
@@ -379,9 +369,10 @@ def uninstall() -> NoReturn:
     else:
         console.print("[green]No existing directories found that need manual cleanup.[/green]\n")
 
-    if os.getenv('PYAPP'):
+    pyapp_exe = config.own_pyapp_exe()
+    if pyapp_exe:
         if Confirm.ask("Would you like to uninstall redfetch's little python environment?"):
-            self_remove()
+            self_remove(pyapp_exe)
         else:
             console.print("[yellow]Uninstallation canceled.[/yellow]")
     else:

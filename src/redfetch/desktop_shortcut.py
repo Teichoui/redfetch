@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 # standard
-import os
 import shutil
 import sys
 from pathlib import Path
 
 # third-party
 from platformdirs import user_desktop_path
+
+# local
+from redfetch import config
 
 SHORTCUT_FILENAME = "redfetch.lnk"
 
@@ -28,9 +30,9 @@ def create_shortcut(overwrite: bool = True) -> Path:
     if shortcut_path.exists() and not overwrite:
         return shortcut_path
 
-    pyapp = os.environ.get("PYAPP")
-    if pyapp and Path(pyapp).exists():
-        target = Path(pyapp)
+    pyapp_exe = config.own_pyapp_exe()
+    if pyapp_exe:
+        target = Path(pyapp_exe)
         args = ""
     else:
         cmd = shutil.which("redfetch")

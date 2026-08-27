@@ -5,11 +5,13 @@ import os
 import platform
 import re
 import shutil
+import sys
 import tomllib
 from contextlib import suppress
 from pathlib import Path
 
 # third-party
+import psutil
 import tomlkit
 from tomlkit.exceptions import TOMLKitError
 from dynaconf import Dynaconf, Validator, ValidationError
@@ -245,11 +247,32 @@ def self_heal_eqpath() -> None:
             continue  # we're not stopping for this
 
 
+def own_pyapp_exe() -> str | None:
+    """The PyApp redfetch.exe that launched this process, or None for pip/pipx/uv installs."""
+    exe = os.environ.get("PYAPP")
+    if not exe or not os.path.isfile(exe):
+        return None
+    launcher = _launcher_exe()
+    return exe if launcher and os.path.samefile(launcher, exe) else None
+
+
+def _launcher_exe() -> str | None:
+    """Image path of the process that started this interpreter, if it's still around."""
+    try:
+        parent = psutil.Process().parent()
+        # A venv's python.exe is a stub that runs the real interpreter as a child; look past it.
+        if parent and os.path.samefile(parent.exe(), sys.executable):
+            parent = parent.parent()
+        return parent.exe() if parent else None
+    except (psutil.Error, OSError):
+        return None
+
+
 def _resolve_redfetch_executable():
-    """PYAPP will give a path when built with PYAPP_PASS_LOCATION=1"""
-    pyapp = os.environ.get("PYAPP")
-    if pyapp and "redfetch" in os.path.basename(pyapp).lower() and os.path.exists(pyapp):
-        return os.path.abspath(pyapp)
+    """Path of the redfetch launcher to record: the PyApp exe, else `redfetch` on PATH, else None."""
+    exe = own_pyapp_exe()
+    if exe:
+        return exe
 
     cmd = shutil.which("redfetch")
     if cmd:

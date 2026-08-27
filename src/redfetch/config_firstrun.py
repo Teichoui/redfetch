@@ -18,7 +18,7 @@ from tomlkit import TOMLDocument
 
 # Custom
 from redfetch import detecteq
-from redfetch.config import ENVS, _descend_tables, load_config, save_config
+from redfetch.config import ENVS, _descend_tables, load_config, own_pyapp_exe, save_config
 from redfetch.detecteq import find_everquest_uninstall_location
 
 console = Console()
@@ -452,7 +452,7 @@ def first_run_setup():
         from redfetch import desktop_shortcut
 
         # Default "yes" for standalone exe users, "no" for pipx/terminal users.
-        default_choice = bool(os.environ.get("PYAPP"))
+        default_choice = own_pyapp_exe() is not None
 
         console.print(
             "\n[bold cyan][italic]\"Shall we set a signe upon thy fair anime wallpaper?\"[/italic][/bold cyan]"
